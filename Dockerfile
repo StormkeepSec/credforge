@@ -17,6 +17,7 @@ COPY scripts/ scripts/
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/db/package.json packages/db/
+COPY packages/ob3/package.json packages/ob3/
 COPY packages/ui/package.json packages/ui/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm install --frozen-lockfile
 

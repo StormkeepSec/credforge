@@ -1,6 +1,6 @@
 # credforge: Design Plan
 
-**Status:** v0.2. Decisions recorded (§18); ready for M0. Nothing is built yet.
+**Status:** v0.3. M0 and M1 are done. M1's sample credentials passed the 1EdTech validator on 2026-10-14 (§17). M1 findings that changed the plan are folded into §4.2, §5.1, §6.1, §6.2, §9, §15 and §17.
 **Date:** 2026-10-14
 **Inputs:** `openbadges_platform_project_requirements.md` (first attempt), `branding/` (brand guide, copy kit, logo assets), and the 1EdTech Open Badges 3.0 spec (Final Release, document v1.4.5, June 29, 2026).
 
@@ -142,8 +142,11 @@ This is a pure library with **no database and no HTTP**. It is where standards c
 - Hashes and checks recipient identifiers (`sha256$…` + salt).
 - Bakes and extracts credentials in PNG (`iTXt` chunk, keyword `openbadgecredential`) and SVG (`<openbadges:credential>`).
 - Encodes and decodes Bitstring Status Lists (GZIP + multibase).
-- **Pinned JSON-LD document loader.** The VCDM 2.0 and OB 3.0.3 contexts ship inside the package. Signing never fetches contexts over the network, for security and reliability.
+- **Pinned JSON-LD document loader.** The contexts ship inside the package as byte-for-byte copies with recorded hashes: VCDM 2.0, OB 3.0.3, the OB 3.0 extensions context, W3C Controlled Identifiers v1.0, Multikey v1 and Data Integrity v2. The loader never fetches anything over the network, for security and reliability; issuer profiles are handed to it by the caller.
 - Exposes a `Signer` interface, so the in-process key signer can later be swapped for a KMS or HSM.
+- Verifies through two independent paths in its tests: Digital Bazaar's verifier, and a second verifier that shares no code with signing (a different JSON-LD processor and RDF canonicalizer, `node:crypto` for Ed25519).
+
+Details, usage and the validator procedure are in `packages/ob3/README.md`.
 
 ---
 
@@ -155,7 +158,8 @@ This is a pure library with **no database and no HTTP**. It is where standards c
 {
   "@context": [
     "https://www.w3.org/ns/credentials/v2",
-    "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json"
+    "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json",
+    "https://purl.imsglobal.org/spec/ob/v3p0/extensions.json"
   ],
   "id": "https://credforge.app/credentials/0b6f3c1e-5d0a-4b8e-9c55-1c2f7e3d9a10",
   "type": ["VerifiableCredential", "OpenBadgeCredential"],
@@ -207,18 +211,25 @@ This is a pure library with **no database and no HTTP**. It is where standards c
     "id": "https://purl.imsglobal.org/spec/ob/v3p0/schema/json/ob_v3p0_achievementcredential_schema.json",
     "type": "1EdTechJsonSchemaValidator2019"
   }],
-  "proof": [{
+  "proof": {
     "type": "DataIntegrityProof",
     "cryptosuite": "eddsa-rdfc-2022",
     "created": "2026-11-02T15:04:05Z",
     "verificationMethod": "https://credforge.app/issuers/7f3e9a52-…#z6Mk…",
     "proofPurpose": "assertionMethod",
     "proofValue": "z…"
-  }]
+  }
 }
 ```
 
 Optional fields filled when present: `validUntil` (expiry), `evidence[]` (URL, name, narrative), `achievement.alignment[]` and skill tags, `credentialSubject.result[]`.
+
+Details settled in M1 (the full signed example is `packages/ob3/test/fixtures/golden/credential.signed.json`):
+
+- **The third `@context`, `…/ob/v3p0/extensions.json`, is required.** It is the only context that defines `1EdTechJsonSchemaValidator2019`, the `credentialSchema` type. Without it that type is an undefined term, and eddsa-rdfc-2022 canonicalization (JSON-LD safe mode) refuses to sign. The OB 3.0 spec's own examples include it, and the 1EdTech validator bundles it.
+- **`statusListIndex` is a string**, as Bitstring Status List v1.0 requires. The OB 3.0 examples show a number; the 1EdTech validator reads both, and so does credforge's verifier.
+- **`proof` is a single object**, as Digital Bazaar's library writes it (the schema allows an object or an array).
+- **`identityHash`** is `sha256$` + hex of SHA-256 over the UTF-8 bytes of the normalized email followed by the salt. Normalization is trim, Unicode NFC and lowercase. The salt is 16 random bytes, base64url-encoded. This matches the spec's example vector (`a@example.com` + `Kosher`).
 
 ### 5.2 Rules
 
@@ -272,11 +283,38 @@ Optional fields filled when present: `validUntil` (expiry), `evidence[]` (URL, n
 - Issuer `id` = `{PUBLIC_BASE_URL}/issuers/{uuid}`. Requesting it as JSON returns the OB `Profile`, which also works as a controller document. It lists each published key as a `Multikey` verification method (`publicKeyMultibase` starting with `z6Mk…`) and references it from `assertionMethod`. Requesting it as HTML returns the public issuer page.
 - Proofs use `verificationMethod: "{issuerId}#{publicKeyMultibase}"`, the same pattern as the spec examples.
 - `did:web` (`did:web:credforge.app:issuers:{uuid}`) is a possible later option but not MVP.
-- ⚠️ **Highest interop risk:** the exact profile-document shape that the 1EdTech validator and the Digital Bazaar verifiers both accept. Milestone M1 proves this before anything else is built on it.
+- **Interop risk settled in M1.** The profile document's shape is pinned down and tested:
+
+  ```json
+  {
+    "@context": [
+      "https://www.w3.org/ns/credentials/v2",
+      "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json",
+      "https://www.w3.org/ns/cid/v1"
+    ],
+    "id": "https://credforge.app/issuers/7f3e9a52-…",
+    "type": ["Profile"],
+    "name": "Example Cyber Academy",
+    "url": "https://example.org",
+    "verificationMethod": [{
+      "id": "https://credforge.app/issuers/7f3e9a52-…#z6Mk…",
+      "type": "Multikey",
+      "controller": "https://credforge.app/issuers/7f3e9a52-…",
+      "publicKeyMultibase": "z6Mk…"
+    }],
+    "assertionMethod": ["https://credforge.app/issuers/7f3e9a52-…#z6Mk…"]
+  }
+  ```
+
+  - **The W3C Controlled Identifiers v1.0 context (`https://www.w3.org/ns/cid/v1`) is needed.** Neither the VCDM 2.0 nor the OB 3.0 context defines `verificationMethod`, `assertionMethod`, `controller`, `Multikey` or `publicKeyMultibase`. Digital Bazaar's verifier processes the controller document as JSON-LD in safe mode, where undefined terms are errors. The three contexts combine without protected-term conflicts.
+  - **Digital Bazaar's verifier** (`@digitalbazaar/vc` + `data-integrity` + `eddsa-rdfc-2022-cryptosuite`) dereferences the key id, then the controller document, and checks that `assertionMethod` lists the key and that the key's controller is the credential issuer. credforge's verifier serves both from the issuer profile; the key comes back with the Multikey context, which the key library requires.
+  - **The 1EdTech validator** (`EmbeddedProofProbe` in its public source) reads the key straight from a `{controller}#z6Mk…` fragment and only checks that the controller equals `issuer.id`. It doesn't fetch the profile for the proof. Its fallback for other key URLs expects type `"MultiKey"` with a capital K, which never matches a conformant `Multikey`, so the fragment form is the one that works there. One consequence: it can't see a key that was revoked in the profile.
+  - Shape rules both rely on: `verificationMethod` is an array, `assertionMethod` holds id strings, and each method's `controller` is exactly the issuer id.
+  - The HTTPS-URL form verifies on both paths, so the `did:web` fallback isn't needed. The engine is id-agnostic and is tested with a `did:web` issuer too.
 
 ### 6.2 Key custody
 
-- Each issuer gets an **Ed25519** key pair, generated server-side when the issuer is created.
+- Each issuer gets an **Ed25519** key pair, generated server-side when the issuer is created. It is kept in Multikey form: `publicKeyMultibase` (`z6Mk…`) and `secretKeyMultibase` (`z3u2…`, the 32-byte seed), the format of the W3C test vectors.
 - Private keys are **encrypted at rest** with AES-256-GCM under a **master key** from `CREDFORGE_MASTER_KEY` (or a Docker secret file). Leaking the database alone does not let anyone forge credentials.
 - The master key is versioned (`kek_version`), so it can be rotated with a CLI command that re-encrypts all issuer keys.
 - Private keys never leave the server process. They are never logged, never returned by the API, and never exported in the MVP.
@@ -445,7 +483,7 @@ Upload a CSV (MVP limit: 10,000 rows / 5 MB, with a downloadable template) → m
 | `/credentials/:id` | Credential page (HTML) or signed VC (JSON) | **Permanent**; `?t=` claim token |
 | `/credentials/:id/badge.png`, `badge.svg`, `credential.json` | Downloads | |
 | `/credentials/:id/certificate` | Printable certificate | |
-| `/status/:issuerId/:listId` | Signed `BitstringStatusListCredential` | Short cache TTL |
+| `/status/:issuerId/:listId` | Signed `BitstringStatusListCredential` | Short cache TTL plus an `ETag`. Must be public JSON: the 1EdTech validator fetches and verifies it for every credential with a status entry, about 10 times per check, so rate limits must not block repeated fetches |
 | `/verify` | Verification tool | |
 | `/api/v1/*` | REST API | |
 | `/api/auth/*` | Better Auth endpoints, including the Google/Microsoft callbacks (`/api/auth/callback/{provider}`) | |
@@ -691,7 +729,7 @@ The app **refuses to start** if a required value is missing or malformed. It val
 
 ## 15. Testing and conformance
 
-- **`packages/ob3`:** unit tests and golden fixtures. Every credential produced in tests is **independently verified** with Digital Bazaar's verifier and **validated against the official OB 3.0 JSON Schema**.
+- **`packages/ob3`:** unit tests and golden fixtures. Every credential produced in tests is **verified twice**: by Digital Bazaar's verifier, and by an independent test verifier that shares no code with the signing path (`jsonld-streaming-parser` and `rdfjs-c14n` instead of jsonld.js and rdf-canonize, `node:crypto` Ed25519, the 1EdTech validator's key-resolution rules). It is also **validated against the official OB 3.0 JSON Schema**. Signing reproduces the W3C vc-di-eddsa test vectors exactly.
 - **Interop checks:** the 1EdTech OB 3.0 validator, and importing JSON and baked badges into common wallets and validators. These are a release gate for the credential format.
 - **API integration tests** run against a real Postgres (Testcontainers), including the cross-tenant suite.
 - **End-to-end tests** (Playwright) cover sign up → create achievement → award → claim → verify → revoke, with axe accessibility checks.
@@ -738,7 +776,15 @@ Monorepo tooling: **pnpm workspaces**, TypeScript project references, ESLint + P
 | **M2** | **Accounts and issuers:** sign up/in with password, **Google and Microsoft**; connected sign-in methods; email verification; MFA (including the gate after federated sign-in); orgs, members, invitations, roles; **org approval queue** (pending → active/declined); issuer profile + keys + logo; public issuer page; audit log | A team can set up a branded issuer, and a platform admin can approve it |
 | **M3** | **Achievements and single award:** achievement CRUD; **image pipeline** (validate, sanitize, resize, Open Graph card) on **Spaces**; award one; public credential page (HTML/JSON/baked downloads); **SendGrid delivery + signed Event Webhook** and claim link; LinkedIn | You can award a real badge to your own inbox and verify it |
 | **M4** | **Bulk, revoke, verify:** CSV wizard + batch jobs, revoke/reissue + status-list publishing, `/verify` tool and API, credentials search, CSV/JSONL export | Initial-release acceptance criteria 3–7 are met |
-| **M5** | **API and production hardening:** API keys + OpenAPI docs, rate limits, abuse controls, domain verification, CSP, backups to Spaces and a tested restore, deployment guide, landing page, **privacy policy and terms pages** (Google's consent screen requires them), production Google/Microsoft app registrations | Deployed at `https://credforge.app` |
+| **M5** | **API and production hardening:** API keys + OpenAPI docs, rate limits, abuse controls, domain verification, CSP, backups to Spaces and a tested restore, deployment guide, landing page, **privacy policy and terms pages** (Google's consent screen requires them), production Google/Microsoft app registrations | Deployed at `https://credforge.app`, and real credentials issued there pass the 1EdTech validator |
+
+**M1 result (2026-10-14): done.**
+
+- **What was checked:** the sample from `packages/ob3` was generated for a temporary Cloudflare quick-tunnel address, and its `public/` documents were served there over HTTPS (procedure in the package README).
+- **Result:** on the 1EdTech validator (https://vc.1ed.tech, Open Badges 3.0), `credential.json`, `badge.png` and `badge.svg` passed, and `credential-revoked.json` was reported as revoked.
+- **What the validator fetched** (from the sample server's log): the issuer's `url` once per check and the status list credential about 10 times per check. It never fetched the issuer profile.
+- **Also passing:** every credential in the package tests passes both verifiers and the official schema.
+- **Next time:** repeat the validator check against real credentials on the live deployment before launch (M5).
 
 ### After the MVP
 
@@ -747,8 +793,8 @@ Monorepo tooling: **pnpm workspaces**, TypeScript project references, ESLint + P
 
 ### Top technical risks
 
-1. **Key discovery shape:** whether validators accept an HTTP-URL issuer profile acting as the controller document. *Mitigation:* M1 spike, with `did:web` as a fallback.
-2. **Spec details that differ between documents.** For example, the OB 3.0 example shows `statusListIndex` as a number, while Bitstring Status List v1.0 requires a string. *Mitigation:* golden tests against both the OB schema and the W3C spec.
+1. **Key discovery shape:** whether validators accept an HTTP-URL issuer profile acting as the controller document. *Resolved in M1* (§6.1): the profile carries the Controlled Identifiers context, Digital Bazaar's verifier accepts it, and the 1EdTech validator reads the key from the `#z6Mk…` fragment without fetching the profile (confirmed in a live validator run on 2026-10-14). `did:web` is not needed.
+2. **Spec details that differ between documents.** *Resolved in M1* (§5.1): `statusListIndex` is written as a string and read in either form; the credential needs the OB extensions context for `credentialSchema` to be signable. Golden tests cover the OB schema, the W3C test vectors and two independent verifiers.
 3. **Email deliverability:** a brand-new sending domain. *Mitigation:* SendGrid Domain Authentication and DMARC from day one, bounce tracking through the Event Webhook, and low early volume thanks to the approval gate.
 4. **Abuse of the hosted instance** (impersonation, phishing). *Mitigation:* the §6.3 controls, with the approval gate in place before signup opens.
 5. **Bulk signing throughput.** RDF canonicalization costs tens of milliseconds per credential, so a 10,000-row batch takes a few minutes. That is fine for a background job, and progress is shown in the UI.

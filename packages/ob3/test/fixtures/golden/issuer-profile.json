@@ -1,0 +1,30 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/credentials/v2",
+    "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json",
+    "https://www.w3.org/ns/cid/v1"
+  ],
+  "id": "https://credforge.app/issuers/7f3e9a52-0c4b-4d8e-9a61-2b5d8c1e0f37",
+  "type": [
+    "Profile"
+  ],
+  "name": "Example Cyber Academy",
+  "url": "https://example.org",
+  "email": "badges@example.org",
+  "description": "Hands-on security training for small teams.",
+  "image": {
+    "id": "https://credforge.app/issuers/7f3e9a52-0c4b-4d8e-9a61-2b5d8c1e0f37/images/c41a9e0d.png",
+    "type": "Image"
+  },
+  "verificationMethod": [
+    {
+      "id": "https://credforge.app/issuers/7f3e9a52-0c4b-4d8e-9a61-2b5d8c1e0f37#z6MkjDopvnFuVrLxw3Rs4gfo1dMyQvSPrqdkHGv1qtVgUZJH",
+      "type": "Multikey",
+      "controller": "https://credforge.app/issuers/7f3e9a52-0c4b-4d8e-9a61-2b5d8c1e0f37",
+      "publicKeyMultibase": "z6MkjDopvnFuVrLxw3Rs4gfo1dMyQvSPrqdkHGv1qtVgUZJH"
+    }
+  ],
+  "assertionMethod": [
+    "https://credforge.app/issuers/7f3e9a52-0c4b-4d8e-9a61-2b5d8c1e0f37#z6MkjDopvnFuVrLxw3Rs4gfo1dMyQvSPrqdkHGv1qtVgUZJH"
+  ]
+}

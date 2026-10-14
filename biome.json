@@ -2,7 +2,16 @@
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "includes": ["**", "!branding", "!**/migrations", "!**/*.md", "!**/*.svg"]
+    "includes": [
+      "**",
+      "!branding",
+      "!**/migrations",
+      "!**/*.md",
+      "!**/*.svg",
+      "!packages/ob3/src/vendor",
+      "!packages/ob3/test/fixtures",
+      "!packages/ob3/fixtures"
+    ]
   },
   "formatter": {
     "indentStyle": "space",

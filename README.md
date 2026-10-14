@@ -3,8 +3,8 @@
 **Make achievement mean more.** credforge helps organizations create and award
 [Open Badges 3.0](https://www.imsglobal.org/spec/ob/v3p0) digital badges.
 
-> **Status:** early development, at milestone M0 (foundations). See the
-> [design plan](docs/design-plan.md) for the architecture and the roadmap.
+> **Status:** early development. M0 (foundations) and M1 (the credential engine in `packages/ob3`)
+> are done. See the [design plan](docs/design-plan.md) for the architecture and the roadmap.
 
 ## Requirements
 
@@ -57,6 +57,7 @@ start if it changes. For a local trial use `http://localhost:3000`, then remove 
 apps/server     Fastify: REST API, server-rendered public pages, worker, migrations runner
 apps/web        React issuer app (Vite) and the stylesheet for public pages
 packages/db     Database schema and SQL migrations (Drizzle ORM)
+packages/ob3    Credential engine: build, sign, verify, bake and status lists for Open Badges 3.0
 packages/ui     Brand tokens (Tailwind CSS theme)
 docs/           Design plan and other documentation
 branding/       Brand guide, copy kit and logo assets

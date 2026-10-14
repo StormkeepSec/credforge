@@ -1,0 +1,29 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/credentials/v2",
+    "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json",
+    "https://www.w3.org/ns/cid/v1"
+  ],
+  "id": "https://credforge.app/ob3-sample/issuers/5a1e0c7d-3b2f-4e8a-9c6d-0f1e2d3c4b5a",
+  "type": [
+    "Profile"
+  ],
+  "name": "credforge sample issuer (test only)",
+  "url": "https://credforge.app",
+  "description": "A sample issuer for checking credforge output with external validators.",
+  "image": {
+    "id": "https://credforge.app/ob3-sample/images/issuer.png",
+    "type": "Image"
+  },
+  "verificationMethod": [
+    {
+      "id": "https://credforge.app/ob3-sample/issuers/5a1e0c7d-3b2f-4e8a-9c6d-0f1e2d3c4b5a#z6Mkedqn5Z7zHduFGCSVc5ufVpjNty7VosHb5fWY3S1vmPCG",
+      "type": "Multikey",
+      "controller": "https://credforge.app/ob3-sample/issuers/5a1e0c7d-3b2f-4e8a-9c6d-0f1e2d3c4b5a",
+      "publicKeyMultibase": "z6Mkedqn5Z7zHduFGCSVc5ufVpjNty7VosHb5fWY3S1vmPCG"
+    }
+  ],
+  "assertionMethod": [
+    "https://credforge.app/ob3-sample/issuers/5a1e0c7d-3b2f-4e8a-9c6d-0f1e2d3c4b5a#z6Mkedqn5Z7zHduFGCSVc5ufVpjNty7VosHb5fWY3S1vmPCG"
+  ]
+}
