@@ -1,0 +1,67 @@
+# credforge production stack.
+#   cp .env.example .env   # then fill it in
+#   docker compose up -d --build
+# The app listens on 127.0.0.1:3000 only; put your nginx (TLS) in front of it.
+
+name: credforge
+
+x-app: &app
+  image: credforge:${CREDFORGE_VERSION:-latest} # becomes a registry path once the repo is hosted
+  build: .
+  env_file: .env
+  environment:
+    DATABASE_URL: postgres://credforge:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/credforge
+  restart: unless-stopped
+
+services:
+  migrate:
+    <<: *app
+    command: ["node", "--enable-source-maps", "dist/migrate.js"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  app:
+    <<: *app
+    ports:
+      - "127.0.0.1:${CREDFORGE_PORT:-3000}:3000"
+    volumes:
+      - uploads:/data/uploads # only used with STORAGE_DRIVER=local
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  worker:
+    <<: *app
+    command: ["node", "--enable-source-maps", "dist/worker.js"]
+    volumes:
+      - uploads:/data/uploads # only used with STORAGE_DRIVER=local
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: credforge
+      POSTGRES_USER: credforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql # PostgreSQL 18 images expect this mount point
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U credforge -d credforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata: {}
+  uploads: {}

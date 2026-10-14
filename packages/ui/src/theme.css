@@ -1,0 +1,27 @@
+/*
+ * credforge brand tokens (Tailwind CSS v4 theme).
+ * Source: branding/credforge-brand-guide.pdf. Contrast ratios: docs/design-plan.md §11.3.
+ *
+ * Usage rule from the brand guide: ink or ink-muted for body text on canvas. Signal teal and
+ * spark violet work as text on ink; on light surfaces reserve them for large display, icons
+ * and shapes, and use the *-strong shades for small text, links and buttons.
+ */
+@theme {
+  --font-sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+
+  /* Brand palette */
+  --color-ink: #111827; /* Forge ink: 17.0:1 on canvas */
+  --color-ink-muted: #374151; /* Slate: 9.88:1 on canvas */
+  --color-canvas: #fafafa; /* Canvas */
+  --color-signal: #379392; /* Signal teal: 4.86:1 on ink; 3.50:1 on canvas (large/graphics only) */
+  --color-spark: #ca3cff; /* Spark violet: 4.73:1 on ink; 3.59:1 on canvas (large/graphics only) */
+
+  /* Accessible shades for small text and controls on light surfaces */
+  --color-signal-strong: #2b7473; /* 5.23:1 on canvas; white on it 5.46:1 */
+  --color-spark-strong: #9a1fcc; /* 5.85:1 on canvas; white on it 6.10:1 */
+
+  /* Status colors (not defined by the brand guide) */
+  --color-success: #2b7473; /* valid: same as signal-strong */
+  --color-danger: #b42318; /* revoked, errors: 6.30:1 on canvas */
+  --color-warning: #b54708; /* expiring, warnings: 5.20:1 on canvas */
+}

@@ -1,0 +1,22 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.vite/
+
+# Environment and secrets (templates are .env.example / .env.development.example)
+.env
+.env.*
+!.env.example
+!.env.development.example
+secrets/
+
+# Local data
+data/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

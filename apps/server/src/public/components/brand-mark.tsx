@@ -1,0 +1,26 @@
+interface BrandMarkProps {
+  /** `primary` for light surfaces, `reverse` for dark surfaces (brand guide, Logo system). */
+  variant?: 'primary' | 'reverse';
+  className?: string;
+}
+
+/** The credforge mark: the forge, held in a badge. Paths from branding/credforge-brand-assets.zip. */
+export function BrandMark({ variant = 'primary', className }: BrandMarkProps) {
+  const shield = variant === 'reverse' ? '#FAFAFA' : '#374151';
+  return (
+    <svg viewBox="0 0 512 512" className={className} aria-hidden="true" focusable="false">
+      <path
+        fill="#379392"
+        d="M426,151.03v33c-40.88,1.96-68.46,11.68-100.01,39.49-36.96,32.58-19.27,81.7,28.01,86.55v28.96h-67c-6.09-37.19-56.49-37.43-62,0h-66v-29c31.24-.36,56.91-34.31,43.49-63.99-3.88-8.59-6.43-5.03-13.98-6.02-49.2-6.45-92.59-38.84-102.51-88.99h340Z"
+      />
+      <path
+        fill={shield}
+        d="M64,170.03l9.48,20.02c6.86,12.69,16.27,23.48,26.32,33.68l1.15,110.6,155.57,92.65,154.55-92.39.89-121.9,36.04-5.66v148.5l-191.49,114.43c-2.39,0-20.12-10.99-23.81-13.13-51.41-29.92-105.65-61.37-155.62-93.38-4.43-2.84-9.14-5.38-13.08-8.92v-184.5Z"
+      />
+      <path
+        fill={shield}
+        d="M448,42.03v85h-36v-46.5l-1.5-1.5H103.5c-.54,0-2.22,1.55-3.5,1v47h-36V42.03h384Z"
+      />
+    </svg>
+  );
+}

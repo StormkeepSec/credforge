@@ -1,0 +1,32 @@
+# Local development services. The app itself runs on your machine with `pnpm dev`.
+#   pnpm infra:up     # start Postgres and Mailpit
+#   pnpm infra:down   # stop them (data is kept in the pgdata volume)
+
+name: credforge-dev
+
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: credforge
+      POSTGRES_USER: credforge
+      POSTGRES_PASSWORD: credforge
+    ports:
+      - "127.0.0.1:${CREDFORGE_DEV_DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U credforge -d credforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Catches every email the app sends. Inbox: http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:v1.31
+    ports:
+      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:1025:1025"
+
+volumes:
+  pgdata: {}

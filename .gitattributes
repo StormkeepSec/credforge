@@ -1,0 +1,10 @@
+# Normalize line endings to LF everywhere (shell scripts and Dockerfiles break with CRLF).
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary

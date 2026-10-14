@@ -1,0 +1,3 @@
+/* Styles for the issuer app (React SPA). */
+@import "tailwindcss";
+@import "@credforge/ui/theme.css";

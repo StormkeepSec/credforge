@@ -1,0 +1,8 @@
+/*
+ * Stylesheet for the server-rendered public pages (landing, credential, issuer, verify).
+ * Built by Vite alongside the issuer app; the server finds it through the Vite manifest.
+ * Only classes used in apps/server/src/public are generated.
+ */
+@import "tailwindcss" source(none);
+@import "@credforge/ui/theme.css";
+@source "../../../server/src/public";

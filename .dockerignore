@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+.git
+.githooks
+.github
+.vscode
+.idea
+.env
+.env.*
+secrets
+data
+branding
+docs
+*.md

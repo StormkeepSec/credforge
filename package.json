@@ -1,0 +1,29 @@
+{
+  "name": "credforge",
+  "private": true,
+  "description": "Create and award Open Badges 3.0 digital badges.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "prepare": "node scripts/setup-git-hooks.mjs",
+    "dev": "pnpm db:migrate && pnpm --parallel -r run /^dev/",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "pnpm -r --if-present run test",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "db:generate": "pnpm --filter @credforge/db run generate",
+    "db:migrate": "pnpm --filter @credforge/server run migrate",
+    "infra:up": "docker compose -f compose.dev.yml up -d",
+    "infra:down": "docker compose -f compose.dev.yml down"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "typescript": "~6.0.3"
+  }
+}
