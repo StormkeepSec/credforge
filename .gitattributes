@@ -8,3 +8,8 @@
 *.ico binary
 *.pdf binary
 *.zip binary
+
+# Vendored JSON-LD contexts and JSON schemas are byte-for-byte copies of published files, pinned by
+# SHA-256 (packages/ob3/src/vendor/README.md). Some are published with CRLF, so never convert them.
+packages/ob3/src/vendor/contexts/** -text
+packages/ob3/src/vendor/schemas/** -text
