@@ -6,6 +6,7 @@ import { loadConfigOrExit } from './config';
 import { createKeyEncryption } from './crypto/key-encryption';
 import { loadDevEnvFile } from './dev-env';
 import { createQueueOutbox } from './email/outbox';
+import { createStorage, describeStorage } from './files/storage';
 import { enforceMasterKey, enforcePublicBaseUrl } from './instance';
 import { loggerOptions } from './logger';
 import { createQueueClient } from './queue';
@@ -23,6 +24,7 @@ boss.on('error', (err) => log.error({ err }, 'job queue error'));
 const keys = createKeyEncryption(config.masterKey);
 const outbox = createQueueOutbox(boss);
 const auth = createAuth({ config, db, outbox, log });
+const storage = createStorage(config.storage);
 
 const app = await buildApp({
   config,
@@ -30,7 +32,7 @@ const app = await buildApp({
   checkDatabase: async () => {
     await pool.query('select 1');
   },
-  services: { config, db, auth, outbox, keys },
+  services: { config, db, auth, outbox, keys, storage },
 });
 
 try {
@@ -50,4 +52,7 @@ onShutdown(log, async () => {
 });
 
 await app.listen({ host: config.host, port: config.port });
-log.info({ publicBaseUrl: config.publicBaseUrl }, 'credforge app ready');
+log.info(
+  { publicBaseUrl: config.publicBaseUrl, storage: describeStorage(config.storage) },
+  'credforge app ready',
+);

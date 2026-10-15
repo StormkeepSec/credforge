@@ -43,6 +43,8 @@ export type ProblemCode =
   | 'invitation_email_mismatch'
   | 'already_member'
   | 'bad_origin'
+  | 'file_too_large'
+  | 'unsupported_file'
   | 'internal_error';
 
 export interface Problem {
@@ -232,6 +234,24 @@ export interface SigningKeySummary {
   createdAt: string;
 }
 
+/**
+ * An uploaded image and its derived sizes. Every URL is permanent and content-addressed
+ * (design plan §5.4): `{PUBLIC_BASE_URL}/achievements/{id}/images/{sha256}.png` and so on.
+ */
+export interface ImageSet {
+  /** The cleaned original (PNG or SVG): the image in credentials and for baking. */
+  url: string;
+  /** 512 px PNG, for pages and emails. */
+  url512: string;
+  /** 128 px PNG, for lists. */
+  url128: string;
+  /** 1200×630 Open Graph card (badge images only). */
+  ogUrl: string | null;
+  mimeType: 'image/png' | 'image/svg+xml';
+  width: number | null;
+  height: number | null;
+}
+
 export interface Issuer {
   id: string;
   /** The permanent issuer id embedded in credentials: `{PUBLIC_BASE_URL}/issuers/{id}`. */
@@ -240,6 +260,7 @@ export interface Issuer {
   website: string | null;
   email: string | null;
   description: string | null;
+  logo: ImageSet | null;
   keys: SigningKeySummary[];
   createdAt: string;
   updatedAt: string;

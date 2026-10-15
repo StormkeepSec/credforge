@@ -10,6 +10,7 @@ import { createAuth } from '../../../src/auth/auth';
 import { loadConfig } from '../../../src/config';
 import { createKeyEncryption } from '../../../src/crypto/key-encryption';
 import { createMemoryOutbox } from '../../../src/email/outbox';
+import { createLocalStorage } from '../../../src/files/storage';
 
 const MIGRATIONS_DIR = resolve(import.meta.dirname, '../../../../../packages/db/migrations');
 export const BASE_URL = 'https://credforge.test';
@@ -59,12 +60,16 @@ export async function createTestEnvironment(env: Record<string, string> = {}) {
     WEB_DIST_DIR: mkdtempSync(join(tmpdir(), 'credforge-web-')),
     CREDFORGE_MASTER_KEY: randomBytes(32).toString('base64'),
     AUTH_SECRET: randomBytes(32).toString('hex'),
+    STORAGE_LOCAL_DIR: mkdtempSync(join(tmpdir(), 'credforge-files-')),
     ...env,
   });
   const { db, pool } = createDatabase(appUrl, { max: 5 });
   const outbox = createMemoryOutbox();
   const keys = createKeyEncryption(config.masterKey);
   const auth = createAuth({ config, db, outbox, log: silent });
+  const storage = createLocalStorage(
+    config.storage.driver === 'local' ? config.storage.localDir : mkdtempSync(join(tmpdir(), 'x')),
+  );
   const routes: { method: string; url: string }[] = [];
   const app = await buildApp({
     config,
@@ -72,7 +77,7 @@ export async function createTestEnvironment(env: Record<string, string> = {}) {
     checkDatabase: async () => {
       await pool.query('select 1');
     },
-    services: { config, db, auth, outbox, keys },
+    services: { config, db, auth, outbox, keys, storage },
     onRoute: (route) => {
       for (const method of [route.method].flat()) routes.push({ method, url: route.url });
     },
@@ -92,6 +97,7 @@ export async function createTestEnvironment(env: Record<string, string> = {}) {
     outbox,
     keys,
     auth,
+    storage,
     async close() {
       await app.close();
       await pool.end();

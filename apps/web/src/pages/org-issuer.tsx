@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BadgeCheck, Copy, ExternalLink, KeyRound } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { PageHeader } from '../components/app-shell';
+import { ConfirmButton } from '../components/confirm';
+import { ImagePicker, type PickedImage } from '../components/image-picker';
 import { isWritable, OrgStatusBanner } from '../components/org-status';
 import { Button } from '../components/ui/button';
 import {
@@ -15,7 +17,7 @@ import {
 } from '../components/ui/card';
 import { Alert, Badge, Spinner } from '../components/ui/feedback';
 import { Field, Input, Textarea } from '../components/ui/input';
-import { ApiError, errorMessage, patch, post, queries } from '../lib/api';
+import { ApiError, del, errorMessage, patch, post, queries, upload } from '../lib/api';
 import { formatDate } from '../lib/utils';
 
 type Form = Required<{ [K in keyof IssuerInputBody]: string }>;
@@ -164,9 +166,6 @@ function IssuerForm({
               />
             )}
           </Field>
-          <Alert variant="info" title="Logo">
-            Uploading a logo arrives with badge images in the next update.
-          </Alert>
         </CardContent>
         {!readOnly && (
           <CardFooter>
@@ -176,6 +175,84 @@ function IssuerForm({
           </CardFooter>
         )}
       </form>
+    </Card>
+  );
+}
+
+function LogoCard({
+  orgId,
+  issuer,
+  readOnly,
+}: {
+  orgId: string;
+  issuer: Issuer;
+  readOnly: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [picked, setPicked] = useState<PickedImage | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const done = async (message: string) => {
+    setPicked(null);
+    setNotice(message);
+    await queryClient.invalidateQueries({ queryKey: ['org', orgId, 'issuers'] });
+  };
+  const save = useMutation({
+    mutationFn: (file: File) => upload<Issuer>(`/orgs/${orgId}/issuers/${issuer.id}/logo`, file),
+    onSuccess: () => done('Logo saved.'),
+  });
+  const remove = useMutation({
+    mutationFn: () => del(`/orgs/${orgId}/issuers/${issuer.id}/logo`),
+    onSuccess: () => done('Logo removed.'),
+  });
+  const error = save.error ?? remove.error;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Logo</CardTitle>
+        <CardDescription>
+          Shown on your issuer page and certificates, and included in the badges you award from now
+          on. Badges already awarded keep the logo they were signed with.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {error && <Alert variant="error">{errorMessage(error)}</Alert>}
+        {notice && <Alert variant="success">{notice}</Alert>}
+        <ImagePicker
+          label="Logo image"
+          description="PNG, SVG, JPEG or WebP, up to 2 MB. A square logo works best."
+          currentUrl={issuer.logo?.url512 ?? null}
+          picked={picked}
+          onPick={(image) => {
+            setNotice(null);
+            setPicked(image);
+          }}
+          readOnly={readOnly}
+          alt={issuer.logo || picked ? `${issuer.name} logo` : 'No logo yet'}
+        />
+      </CardContent>
+      {!readOnly && (
+        <CardFooter>
+          <Button
+            onClick={() => picked && save.mutate(picked.file)}
+            disabled={!picked}
+            pending={save.isPending}
+          >
+            Save logo
+          </Button>
+          {issuer.logo && (
+            <ConfirmButton
+              variant="outline"
+              confirmLabel="Remove"
+              question="Remove the logo?"
+              pending={remove.isPending}
+              onConfirm={() => remove.mutate()}
+            >
+              Remove logo
+            </ConfirmButton>
+          )}
+        </CardFooter>
+      )}
     </Card>
   );
 }
@@ -252,6 +329,7 @@ export function OrgIssuerPage({ orgId }: { orgId: string }) {
         ) : (
           <IssuerForm key={orgId} orgId={orgId} issuer={issuer} readOnly={!canWrite} />
         )}
+        {issuer && <LogoCard orgId={orgId} issuer={issuer} readOnly={!canWrite} />}
         {issuer && <IdentityCard issuer={issuer} />}
       </div>
     </>

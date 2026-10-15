@@ -3,7 +3,7 @@ import { eq, user } from '@credforge/db';
 import type { LightMyRequestResponse } from 'fastify';
 import { BASE_URL, type TestEnvironment } from './harness';
 
-type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
 /** A browser-like client: keeps cookies and sends this site's Origin, like the issuer app. */
 export class TestClient {
@@ -44,6 +44,22 @@ export class TestClient {
   }
   delete(url: string) {
     return this.request('DELETE', url);
+  }
+
+  /** Sends a file as the raw request body, as the issuer app uploads images. */
+  async upload(url: string, body: Buffer, contentType: string, method: 'PUT' | 'POST' = 'PUT') {
+    const response = await this.env.app.inject({
+      method,
+      url,
+      headers: {
+        origin: BASE_URL,
+        'content-type': contentType,
+        ...(this.cookies.size > 0 && { cookie: this.cookieHeader() }),
+      },
+      payload: body,
+    });
+    this.storeCookies(response);
+    return response;
   }
 
   cookieHeader() {

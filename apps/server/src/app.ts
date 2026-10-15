@@ -10,6 +10,7 @@ import { authRoutes } from './auth/routes';
 import type { Config } from './config';
 import { loggerOptions } from './logger';
 import { resolvePublicAssets } from './public/assets';
+import { publicImageRoutes } from './public/image-routes';
 import { publicIssuerRoutes } from './public/issuer-routes';
 import { createNotFoundHandler, publicPages } from './public/routes';
 import { healthRoutes } from './routes/health';
@@ -85,6 +86,7 @@ export async function buildApp({
     await app.register(authRoutes, services);
     await app.register(apiV1, { services, prefix: '/api/v1' });
     await app.register(publicIssuerRoutes, { services, assets });
+    await app.register(publicImageRoutes, { services });
   }
   await app.register(webApp, { webDistDir: config.webDistDir });
   app.setNotFoundHandler(createNotFoundHandler({ config, assets }));

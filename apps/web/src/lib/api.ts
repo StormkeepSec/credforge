@@ -36,13 +36,17 @@ export class ApiError extends Error {
 
 export async function api<T>(
   path: string,
-  init: { method?: string; body?: unknown } = {},
+  init: { method?: string; body?: unknown; file?: File } = {},
 ): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
     method: init.method ?? 'GET',
     credentials: 'same-origin',
-    headers: init.body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    headers: init.file
+      ? { 'content-type': init.file.type || 'application/octet-stream' }
+      : init.body === undefined
+        ? undefined
+        : { 'content-type': 'application/json' },
+    body: init.file ?? (init.body === undefined ? undefined : JSON.stringify(init.body)),
   });
   if (response.status === 204) return undefined as T;
   const text = await response.text();
@@ -54,6 +58,8 @@ export async function api<T>(
 export const post = <T>(path: string, body: unknown = {}) => api<T>(path, { method: 'POST', body });
 export const patch = <T>(path: string, body: unknown) => api<T>(path, { method: 'PATCH', body });
 export const del = (path: string) => api<void>(path, { method: 'DELETE' });
+/** Uploads a file as the raw request body (image uploads). */
+export const upload = <T>(path: string, file: File) => api<T>(path, { method: 'PUT', file });
 
 // ---- queries ----
 

@@ -2,7 +2,9 @@ import { type Issuer, issuerInput, updateIssuerInput } from '@credforge/contract
 import { and, asc, eq, issuer } from '@credforge/db';
 import type { FastifyPluginAsync } from 'fastify';
 import { notFound, parse, uuidParam } from '../api/errors';
+import { acceptImageUploads, storeUploadedImage, UPLOAD_ROUTE_OPTIONS } from '../api/uploads';
 import { recordAudit } from '../audit/audit';
+import { deleteFiles, loadFiles } from '../files/service';
 import { requestInfo, requirePermission, requireWritable, userActor } from '../orgs/access';
 import type { Services } from '../services';
 import {
@@ -27,7 +29,8 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
   app,
   { services },
 ) => {
-  const { db, keys, config } = services;
+  const { db, keys, config, storage } = services;
+  acceptImageUploads(app);
 
   async function load(orgId: string, issuerId: string): Promise<Issuer> {
     const [row] = await db
@@ -35,7 +38,12 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
       .from(issuer)
       .where(and(eq(issuer.orgId, orgId), eq(issuer.id, issuerId)));
     if (!row) throw notFound('Issuer');
-    return serializeIssuer(config.publicBaseUrl, row, await keysForIssuers(db, orgId, [row.id]));
+    return serializeIssuer(
+      config.publicBaseUrl,
+      row,
+      await keysForIssuers(db, orgId, [row.id]),
+      await loadFiles(db, [row.imageFileId]),
+    );
   }
 
   app.get('/issuers', async (request): Promise<{ issuers: Issuer[] }> => {
@@ -50,7 +58,13 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
       access.org.id,
       rows.map((row) => row.id),
     );
-    return { issuers: rows.map((row) => serializeIssuer(config.publicBaseUrl, row, issuerKeys)) };
+    const files = await loadFiles(
+      db,
+      rows.map((row) => row.imageFileId),
+    );
+    return {
+      issuers: rows.map((row) => serializeIssuer(config.publicBaseUrl, row, issuerKeys, files)),
+    };
   });
 
   /** Creates an issuer and its first Ed25519 signing key. */
@@ -143,6 +157,87 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
         });
       }
     });
+    return load(access.org.id, issuerId);
+  });
+
+  /**
+   * Sets the issuer's logo: the image file itself as the body (PNG, SVG, JPEG or WebP, up to
+   * 2 MB). Badges awarded from now on carry it; earlier badges keep the logo they were signed with.
+   */
+  app.put('/issuers/:issuerId/logo', UPLOAD_ROUTE_OPTIONS, async (request) => {
+    const access = requirePermission(request, 'issuer:update');
+    requireWritable(access);
+    const issuerId = uuidParam((request.params as { issuerId?: string }).issuerId, 'Issuer');
+    const [current] = await db
+      .select({ id: issuer.id })
+      .from(issuer)
+      .where(and(eq(issuer.orgId, access.org.id), eq(issuer.id, issuerId)));
+    if (!current) throw notFound('Issuer');
+
+    const logo = await storeUploadedImage(db, storage, request, {
+      orgId: access.org.id,
+      kind: 'issuer_logo',
+      subjectId: issuerId,
+      createdBy: access.actor.user.id,
+    });
+    const replaced = await db.transaction(async (tx) => {
+      const [before] = await tx
+        .select({ imageFileId: issuer.imageFileId })
+        .from(issuer)
+        .where(and(eq(issuer.orgId, access.org.id), eq(issuer.id, issuerId)))
+        .for('update');
+      if (!before) throw notFound('Issuer');
+      if (before.imageFileId === logo.id) return null;
+      await tx
+        .update(issuer)
+        .set({ imageFileId: logo.id, updatedAt: new Date() })
+        .where(eq(issuer.id, issuerId));
+      await recordAudit(tx, {
+        orgId: access.org.id,
+        actor: userActor(access.actor),
+        action: 'issuer.logo_changed',
+        target: { type: 'issuer', id: issuerId },
+        data: {
+          sha256: logo.sha256,
+          mimeType: logo.mimeType,
+          width: logo.width,
+          height: logo.height,
+        },
+        request: requestInfo(request),
+      });
+      return before.imageFileId;
+    });
+    // A logo no badge was ever signed with can go; others are kept (design plan §5.4).
+    if (replaced) await deleteFiles(db, storage, [...(await loadFiles(db, [replaced])).values()]);
+    return load(access.org.id, issuerId);
+  });
+
+  app.delete('/issuers/:issuerId/logo', async (request) => {
+    const access = requirePermission(request, 'issuer:update');
+    requireWritable(access);
+    const issuerId = uuidParam((request.params as { issuerId?: string }).issuerId, 'Issuer');
+    const removed = await db.transaction(async (tx) => {
+      const [before] = await tx
+        .select({ imageFileId: issuer.imageFileId })
+        .from(issuer)
+        .where(and(eq(issuer.orgId, access.org.id), eq(issuer.id, issuerId)))
+        .for('update');
+      if (!before) throw notFound('Issuer');
+      if (!before.imageFileId) return null;
+      await tx
+        .update(issuer)
+        .set({ imageFileId: null, updatedAt: new Date() })
+        .where(eq(issuer.id, issuerId));
+      await recordAudit(tx, {
+        orgId: access.org.id,
+        actor: userActor(access.actor),
+        action: 'issuer.logo_removed',
+        target: { type: 'issuer', id: issuerId },
+        request: requestInfo(request),
+      });
+      return before.imageFileId;
+    });
+    if (removed) await deleteFiles(db, storage, [...(await loadFiles(db, [removed])).values()]);
     return load(access.org.id, issuerId);
   });
 };

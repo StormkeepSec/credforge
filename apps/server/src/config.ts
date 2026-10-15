@@ -116,6 +116,18 @@ const envSchema = z
       .regex(/^smtps?:\/\//, 'must be an smtp:// or smtps:// URL')
       .optional(),
     EMAIL_FROM: z.string().trim().optional(),
+    STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+    STORAGE_LOCAL_DIR: z.string().trim().optional(),
+    S3_ENDPOINT: z
+      .string()
+      .trim()
+      .regex(/^https?:\/\//, 'must be a URL, e.g. https://nyc3.digitaloceanspaces.com')
+      .optional(),
+    S3_REGION: z.string().trim().optional(),
+    S3_BUCKET: z.string().trim().optional(),
+    S3_ACCESS_KEY_ID: z.string().trim().optional(),
+    S3_SECRET_ACCESS_KEY: z.string().trim().optional(),
+    S3_FORCE_PATH_STYLE: z.stringbool().default(false),
 
     GOOGLE_CLIENT_ID: z.string().trim().optional(),
     GOOGLE_CLIENT_SECRET: z.string().trim().optional(),
@@ -143,20 +155,34 @@ const envSchema = z
         }
       }
     }
-    if (env.EMAIL_TRANSPORT === 'smtp') {
-      if (!env.SMTP_URL) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['SMTP_URL'],
-          message: 'is required for EMAIL_TRANSPORT=smtp',
-        });
-      }
-      if (production && !env.EMAIL_FROM) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['EMAIL_FROM'],
-          message: 'is required in production, e.g. credforge <awards@credforge.app>',
-        });
+    if (env.EMAIL_TRANSPORT === 'smtp' && !env.SMTP_URL) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SMTP_URL'],
+        message: 'is required for EMAIL_TRANSPORT=smtp',
+      });
+    }
+    if (production && env.EMAIL_TRANSPORT && env.EMAIL_TRANSPORT !== 'log' && !env.EMAIL_FROM) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMAIL_FROM'],
+        message: 'is required in production, e.g. credforge <awards@credforge.app>',
+      });
+    }
+    if (env.STORAGE_DRIVER === 's3') {
+      for (const name of [
+        'S3_REGION',
+        'S3_BUCKET',
+        'S3_ACCESS_KEY_ID',
+        'S3_SECRET_ACCESS_KEY',
+      ] as const) {
+        if (!env[name]) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [name],
+            message: 'is required for STORAGE_DRIVER=s3',
+          });
+        }
       }
     }
     for (const provider of ['GOOGLE', 'MICROSOFT'] as const) {
@@ -171,6 +197,18 @@ const envSchema = z
       }
     }
   });
+
+export type StorageConfig =
+  | { driver: 'local'; localDir: string }
+  | {
+      driver: 's3';
+      endpoint?: string;
+      region: string;
+      bucket: string;
+      accessKeyId: string;
+      secretAccessKey: string;
+      forcePathStyle: boolean;
+    };
 
 export interface OAuthClient {
   clientId: string;
@@ -205,6 +243,7 @@ export interface Config {
     /** e.g. `credforge <awards@credforge.app>`. */
     from: string;
   };
+  storage: StorageConfig;
   oauth: {
     google?: OAuthClient;
     microsoft?: OAuthClient & { tenantId: string };
@@ -290,6 +329,26 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
       from:
         env.EMAIL_FROM ?? `credforge <no-reply@${host === 'localhost' ? 'localhost.test' : host}>`,
     },
+    storage:
+      env.STORAGE_DRIVER === 's3'
+        ? {
+            driver: 's3',
+            endpoint: env.S3_ENDPOINT,
+            region: env.S3_REGION as string,
+            bucket: env.S3_BUCKET as string,
+            accessKeyId: env.S3_ACCESS_KEY_ID as string,
+            secretAccessKey: env.S3_SECRET_ACCESS_KEY as string,
+            forcePathStyle: env.S3_FORCE_PATH_STYLE,
+          }
+        : {
+            driver: 'local',
+            localDir: resolve(
+              env.STORAGE_LOCAL_DIR ??
+                (env.NODE_ENV === 'production'
+                  ? '/data/uploads'
+                  : resolve(here, '../../../data/uploads')),
+            ),
+          },
     oauth: {
       google:
         env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET

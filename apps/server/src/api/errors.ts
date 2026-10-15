@@ -70,6 +70,15 @@ export function problemErrorHandler(
 ) {
   if (error instanceof ApiError) return sendProblem(reply, error);
   const status = (error as FastifyError).statusCode;
+  if (status === 413) {
+    return sendProblem(
+      reply,
+      new ApiError(413, 'file_too_large', 'File too large', 'Files can be at most 2 MB.'),
+    );
+  }
+  if (status === 415) {
+    return sendProblem(reply, new ApiError(415, 'unsupported_file', error.message));
+  }
   if (status && status >= 400 && status < 500) {
     // Fastify's own client errors: malformed JSON, body too large, unsupported content type.
     return sendProblem(

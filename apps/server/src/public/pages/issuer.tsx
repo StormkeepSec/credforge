@@ -10,6 +10,8 @@ export interface IssuerPageProps {
     description: string | null;
     website: string | null;
     email: string | null;
+    /** 512 px logo. */
+    logoUrl: string | null;
   };
   orgStatus: OrgStatus;
   keyCount: number;
@@ -59,12 +61,22 @@ export function IssuerPage({ url, stylesheet, issuer, orgStatus, keyCount }: Iss
         <section className="mx-auto max-w-3xl px-4 py-16 sm:px-6">
           <p className="text-sm font-bold tracking-[0.15em] text-signal-strong uppercase">Issuer</p>
           <div className="mt-4 flex items-center gap-5">
-            <div
-              aria-hidden="true"
-              className="flex size-16 shrink-0 items-center justify-center rounded-xl bg-ink text-xl font-bold text-canvas"
-            >
-              {initials(issuer.name)}
-            </div>
+            {issuer.logoUrl ? (
+              <img
+                src={issuer.logoUrl}
+                alt=""
+                width={64}
+                height={64}
+                className="size-16 shrink-0 rounded-xl object-contain"
+              />
+            ) : (
+              <div
+                aria-hidden="true"
+                className="flex size-16 shrink-0 items-center justify-center rounded-xl bg-ink text-xl font-bold text-canvas"
+              >
+                {initials(issuer.name)}
+              </div>
+            )}
             <h1 className="text-3xl font-bold tracking-tight text-balance sm:text-4xl">
               {issuer.name}
             </h1>

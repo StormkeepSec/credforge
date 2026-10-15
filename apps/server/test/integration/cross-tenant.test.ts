@@ -1,5 +1,6 @@
-import { auditEvent, eq, invitation, issuer, member, organization } from '@credforge/db';
+import { auditEvent, eq, file, invitation, issuer, member, organization } from '@credforge/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { pngWithMetadata } from '../support/images';
 import { lastEmailTo, linkIn, newUser, type TestClient } from './support/client';
 import { createTestEnvironment, type TestEnvironment } from './support/harness';
 
@@ -18,6 +19,8 @@ interface Tenant {
   memberId: string;
   invitationId: string;
 }
+
+let png: Buffer;
 
 let a: Tenant;
 let b: Tenant;
@@ -49,11 +52,14 @@ async function tenant(name: string): Promise<Tenant> {
     role: 'issuer',
   });
   const invitationId = (invited.json() as { id: string }).id;
+
+  await owner.upload(`/api/v1/orgs/${orgId}/issuers/${issuerId}/logo`, png, 'image/png');
   return { owner, orgId, issuerId, memberId, invitationId };
 }
 
 beforeAll(async () => {
   env = await createTestEnvironment({ SIGNUP_MODE: 'open' });
+  png = await pngWithMetadata(200);
   a = await tenant('Alpha');
   b = await tenant('Bravo');
 });
@@ -62,12 +68,14 @@ afterAll(async () => {
 });
 
 interface Case {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   /** Route pattern as registered, relative to /api/v1/orgs/:orgId. */
   route: string;
   body?: unknown;
   /** Has an id of a resource inside the org. */
   resource?: 'memberId' | 'invitationId' | 'issuerId';
+  /** Sends an image file as the body (uploads). */
+  upload?: true;
 }
 
 const CASES: Case[] = [
@@ -90,7 +98,16 @@ const CASES: Case[] = [
     body: { name: 'Hijacked' },
   },
   { method: 'GET', route: '/audit-events' },
+  { method: 'PUT', route: '/issuers/:issuerId/logo', resource: 'issuerId', upload: true },
+  { method: 'DELETE', route: '/issuers/:issuerId/logo', resource: 'issuerId' },
 ];
+
+/** Sends a case as `client`: JSON, or an image upload. */
+function send(client: TestClient, test: Case, url: string) {
+  return test.upload
+    ? client.upload(url, png, 'image/png', 'PUT')
+    : client.request(test.method, url, test.body);
+}
 
 function url(orgId: string, route: string, ids: Partial<Tenant>) {
   return `/api/v1/orgs/${orgId}${route}`
@@ -106,6 +123,7 @@ async function snapshotB() {
     issuers: await env.ownerDb.select().from(issuer).where(eq(issuer.orgId, b.orgId)),
     members: await env.ownerDb.select().from(member).where(eq(member.orgId, b.orgId)),
     invitations: await env.ownerDb.select().from(invitation).where(eq(invitation.orgId, b.orgId)),
+    files: await env.ownerDb.select().from(file).where(eq(file.orgId, b.orgId)),
   };
 }
 
@@ -124,7 +142,7 @@ describe('cross-tenant access', () => {
   it("can't reach another org through its id", async () => {
     const before = await snapshotB();
     for (const test of CASES) {
-      const response = await a.owner.request(test.method, url(b.orgId, test.route, b), test.body);
+      const response = await send(a.owner, test, url(b.orgId, test.route, b));
       expect(response.statusCode, `${test.method} ${test.route}`).toBe(404);
       expect(response.json(), `${test.method} ${test.route}`).toMatchObject({ code: 'not_found' });
     }
@@ -134,7 +152,7 @@ describe('cross-tenant access', () => {
   it("can't reach another org's resources through its own org", async () => {
     const before = await snapshotB();
     for (const test of CASES.filter((item) => item.resource)) {
-      const response = await a.owner.request(test.method, url(a.orgId, test.route, b), test.body);
+      const response = await send(a.owner, test, url(a.orgId, test.route, b));
       expect(response.statusCode, `${test.method} ${test.route}`).toBe(404);
     }
     expect(await snapshotB()).toEqual(before);

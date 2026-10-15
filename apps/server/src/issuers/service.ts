@@ -5,10 +5,12 @@ import {
   buildIssuerProfile,
   createEd25519Signer,
   generateEd25519KeyPair,
+  type IssuerInput,
   type IssuerProfileDocument,
   type Signer,
 } from '@credforge/ob3';
 import { type KeyEncryption, signingKeyAad } from '../crypto/key-encryption';
+import { type FileRow, imageSet } from '../files/service';
 
 export type IssuerRow = typeof issuer.$inferSelect;
 export type SigningKeyRow = typeof signingKey.$inferSelect;
@@ -91,7 +93,9 @@ export function serializeIssuer(
   publicBaseUrl: string,
   row: IssuerRow,
   keys: SigningKeyRow[],
+  files: Map<string, FileRow>,
 ): IssuerResponse {
+  const logo = row.imageFileId ? files.get(row.imageFileId) : undefined;
   return {
     id: row.id,
     url: issuerUrl(publicBaseUrl, row.id),
@@ -99,6 +103,7 @@ export function serializeIssuer(
     website: row.url,
     email: row.email,
     description: row.description,
+    logo: logo ? imageSet(publicBaseUrl, logo) : null,
     keys: keys.filter((key) => key.issuerId === row.id).map(serializeKey),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -114,6 +119,7 @@ export function issuerProfileDocument(
   publicBaseUrl: string,
   row: IssuerRow,
   keys: SigningKeyRow[],
+  logo?: FileRow,
 ): IssuerProfileDocument {
   return buildIssuerProfile({
     id: issuerUrl(publicBaseUrl, row.id),
@@ -121,9 +127,24 @@ export function issuerProfileDocument(
     url: row.url ?? undefined,
     email: row.email ?? undefined,
     description: row.description ?? undefined,
+    image: logo ? imageSet(publicBaseUrl, logo).url : undefined,
     keys: keys.map((key) => ({
       publicKeyMultibase: key.publicKeyMultibase,
       revoked: key.status === 'revoked' ? (key.revokedAt ?? key.createdAt) : undefined,
     })),
   });
+}
+
+/**
+ * The issuer as embedded in each credential (design plan §5.1): its id, name, website, contact
+ * address and logo as they are at the moment of issue. No keys.
+ */
+export function issuerRefInput(publicBaseUrl: string, row: IssuerRow, logo?: FileRow): IssuerInput {
+  return {
+    id: issuerUrl(publicBaseUrl, row.id),
+    name: row.name,
+    url: row.url ?? undefined,
+    email: row.email ?? undefined,
+    image: logo ? imageSet(publicBaseUrl, logo).url : undefined,
+  };
 }

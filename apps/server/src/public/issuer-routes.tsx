@@ -1,6 +1,7 @@
 import { asc, eq, issuer, organization, signingKey } from '@credforge/db';
 import type { FastifyPluginAsync } from 'fastify';
 import { isUuid } from '../api/errors';
+import { imageSet, loadFiles } from '../files/service';
 import { issuerProfileDocument, issuerUrl } from '../issuers/service';
 import type { Services } from '../services';
 import type { PublicAssets } from './assets';
@@ -48,6 +49,9 @@ export const publicIssuerRoutes: FastifyPluginAsync<{
       });
     }
 
+    const logo = row.issuer.imageFileId
+      ? (await loadFiles(db, [row.issuer.imageFileId])).get(row.issuer.imageFileId)
+      : undefined;
     const url = issuerUrl(config.publicBaseUrl, issuerId);
     reply.header('cache-control', 'public, max-age=300');
     if (type === 'text/html') {
@@ -61,6 +65,7 @@ export const publicIssuerRoutes: FastifyPluginAsync<{
               description: row.issuer.description,
               website: row.issuer.url,
               email: row.issuer.email,
+              logoUrl: logo ? imageSet(config.publicBaseUrl, logo).url512 : null,
             }}
             orgStatus={row.orgStatus}
             keyCount={keys.filter((key) => key.status !== 'revoked').length}
@@ -70,8 +75,9 @@ export const publicIssuerRoutes: FastifyPluginAsync<{
     }
     // A public document: any site may read it (no credentials are involved).
     reply.header('access-control-allow-origin', '*');
+    reply.header('cross-origin-resource-policy', 'cross-origin');
     return reply
       .type(`${type}; charset=utf-8`)
-      .send(JSON.stringify(issuerProfileDocument(config.publicBaseUrl, row.issuer, keys)));
+      .send(JSON.stringify(issuerProfileDocument(config.publicBaseUrl, row.issuer, keys, logo)));
   });
 };
