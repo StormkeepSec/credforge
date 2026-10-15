@@ -23,6 +23,8 @@ export const PERMISSIONS = [
   'credential:read',
   'credential:issue',
   'credential:revoke',
+  /** Download every credential with its recipient's address (CSV, JSONL). */
+  'credential:export',
   'audit:read',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];

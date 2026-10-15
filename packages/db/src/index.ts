@@ -12,13 +12,16 @@ export {
   eq,
   gt,
   gte,
+  ilike,
   inArray,
   isNotNull,
   isNull,
   lt,
   lte,
   ne,
+  notInArray,
   or,
+  type SQL,
   sql,
 } from 'drizzle-orm';
 export { APPEND_ONLY_TABLES, type AppRoleOptions, connectionUser, grantAppRole } from './app-role';

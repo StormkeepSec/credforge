@@ -187,6 +187,8 @@ export interface AwardMessageInput {
   trackingId?: string;
   /** Wording for a link sent again. */
   resend?: boolean;
+  /** Wording for a corrected copy that replaces an earlier badge (reissue, design plan §8.6). */
+  reissue?: boolean;
 }
 
 /**
@@ -195,14 +197,18 @@ export interface AwardMessageInput {
  * recipient's token, so the email says to share the badge page's address instead.
  */
 export function awardMessage(input: AwardMessageInput): EmailMessage {
-  const subject = `${input.issuerName} awarded you ${input.achievementName}`;
+  const subject = input.reissue
+    ? `${input.issuerName} corrected your ${input.achievementName} badge`
+    : `${input.issuerName} awarded you ${input.achievementName}`;
   const message = render('award', input.to, subject, {
     image: input.imageUrl
       ? { url: input.imageUrl, alt: `${input.achievementName} badge` }
       : undefined,
     paragraphs: [
       `Hi ${input.recipientName},`,
-      `${input.issuerName} awarded you ${input.achievementName}.`,
+      input.reissue
+        ? `${input.issuerName} sent you a corrected copy of your ${input.achievementName} badge. It replaces the earlier one, which now shows as replaced.`
+        : `${input.issuerName} awarded you ${input.achievementName}.`,
       input.achievementDescription,
       'Open your badge to see it, download it, add it to LinkedIn or share it.',
     ],

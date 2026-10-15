@@ -22,6 +22,20 @@ export function formatDate(iso: string): string {
   });
 }
 
+/**
+ * A credential's award or expiry day. A calendar date is stored as midnight (or 23:59:59) UTC, so
+ * it is shown in UTC, as on the public pages: in local time it would be the day before in the
+ * Americas.
+ */
+export function formatDay(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
     year: 'numeric',

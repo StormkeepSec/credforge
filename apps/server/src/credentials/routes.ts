@@ -1,20 +1,14 @@
 import {
   type AwardPreview,
   awardInput,
+  type BulkRevokeResult,
+  bulkRevokeInput,
   type CredentialPage,
   credentialsQuery,
+  reissueInput,
+  revokeInput,
 } from '@credforge/contracts';
-import {
-  achievement,
-  and,
-  credential,
-  desc,
-  eq,
-  issuer,
-  lt,
-  or,
-  organization,
-} from '@credforge/db';
+import { achievement, and, credential, eq, issuer, organization } from '@credforge/db';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { ApiError, conflict, notFound, parse, uuidParam } from '../api/errors';
@@ -23,6 +17,8 @@ import { awardMessage } from '../email/messages';
 import { imageSet, loadFiles } from '../files/service';
 import { requestInfo, requirePermission, requireWritable, userActor } from '../orgs/access';
 import type { Services } from '../services';
+import { beforeCursor, credentialConditions, newestFirst } from './query';
+import { reissueCredential, revokeCredential, revokeCredentials } from './revocation';
 import {
   awardCredential,
   checkSendLimit,
@@ -38,7 +34,7 @@ const idOf = (request: FastifyRequest) =>
   uuidParam((request.params as { credentialId?: string }).credentialId, 'Credential');
 
 /** `before` cursors are `{createdAt ISO}_{id}`. */
-function parseCursor(value: string | undefined): { at: Date; id: string } | undefined {
+export function parseCursor(value: string | undefined): { at: Date; id: string } | undefined {
   if (!value) return undefined;
   const [at, id] = value.split('_');
   const date = new Date(at ?? '');
@@ -75,19 +71,8 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       })
       .from(credential)
       .innerJoin(achievement, eq(credential.achievementId, achievement.id))
-      .where(
-        and(
-          eq(credential.orgId, access.org.id),
-          query.achievementId ? eq(credential.achievementId, query.achievementId) : undefined,
-          cursor
-            ? or(
-                lt(credential.createdAt, cursor.at),
-                and(eq(credential.createdAt, cursor.at), lt(credential.id, cursor.id)),
-              )
-            : undefined,
-        ),
-      )
-      .orderBy(desc(credential.createdAt), desc(credential.id))
+      .where(and(credentialConditions(access.org.id, query), beforeCursor(cursor)))
+      .orderBy(...newestFirst)
       .limit(query.limit + 1);
     const page = rows.slice(0, query.limit);
     const files = await loadFiles(
@@ -237,6 +222,63 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       });
     });
     return loadCredentialDetails(db, config.publicBaseUrl, access.org.id, credentialId);
+  });
+
+  /**
+   * Revokes one credential (design plan §8.6). Its status bit is set now; the signed status list
+   * is re-published by the worker a few seconds later.
+   */
+  app.post('/credentials/:credentialId/revoke', async (request) => {
+    const access = requirePermission(request, 'credential:revoke');
+    requireWritable(access);
+    const credentialId = idOf(request);
+    const input = parse(revokeInput, request.body);
+    await revokeCredential(
+      services,
+      access.org.id,
+      credentialId,
+      input,
+      userActor(access.actor),
+      requestInfo(request),
+    );
+    return loadCredentialDetails(db, config.publicBaseUrl, access.org.id, credentialId);
+  });
+
+  /** Revokes many at once, with the same reasons. */
+  app.post('/credentials/revoke', async (request): Promise<BulkRevokeResult> => {
+    const access = requirePermission(request, 'credential:revoke');
+    requireWritable(access);
+    const input = parse(bulkRevokeInput, request.body);
+    return revokeCredentials(
+      services,
+      access.org.id,
+      input.credentialIds,
+      input,
+      userActor(access.actor),
+      requestInfo(request),
+    );
+  });
+
+  /**
+   * Reissues a credential: a corrected, newly signed copy replaces it, and the old one is revoked
+   * as superseded. Answers with the new credential.
+   */
+  app.post('/credentials/:credentialId/reissue', async (request, reply) => {
+    requirePermission(request, 'credential:revoke');
+    const access = requirePermission(request, 'credential:issue');
+    requireWritable(access);
+    const input = parse(reissueInput, request.body);
+    const id = await reissueCredential(
+      services,
+      access.org.id,
+      idOf(request),
+      input,
+      userActor(access.actor),
+      requestInfo(request),
+    );
+    return reply
+      .code(201)
+      .send(await loadCredentialDetails(db, config.publicBaseUrl, access.org.id, id));
   });
 };
 

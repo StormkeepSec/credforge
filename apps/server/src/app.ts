@@ -15,8 +15,11 @@ import { publicCredentialRoutes } from './public/credential-routes';
 import { publicImageRoutes } from './public/image-routes';
 import { publicIssuerRoutes } from './public/issuer-routes';
 import { createNotFoundHandler, publicPages } from './public/routes';
+import { publicVerifyRoutes } from './public/verify-routes';
 import { healthRoutes } from './routes/health';
 import type { Services } from './services';
+import type { DocumentFetcher } from './verify/fetch';
+import { createVerifyTools } from './verify/routes';
 import { webApp } from './web-app';
 
 export interface AppDependencies {
@@ -30,6 +33,8 @@ export interface AppDependencies {
   loggerInstance?: FastifyBaseLogger;
   /** Sees every route as it is registered (the cross-tenant tests check they cover them all). */
   onRoute?: (route: RouteOptions) => void;
+  /** Fetches other issuers' documents for /verify (tests pass a stand-in). */
+  verifyFetcher?: DocumentFetcher;
 }
 
 const REQUEST_ID_PATTERN = /^[\w-]{8,128}$/;
@@ -41,6 +46,7 @@ export async function buildApp({
   logger,
   loggerInstance,
   onRoute,
+  verifyFetcher,
 }: AppDependencies) {
   const app = Fastify({
     ...(loggerInstance ? { loggerInstance } : { logger: logger ?? loggerOptions(config) }),
@@ -88,11 +94,14 @@ export async function buildApp({
   await app.register(healthRoutes, { checkDatabase });
   await app.register(publicPages, { config, assets });
   if (services) {
+    const tools = createVerifyTools(services.config);
+    const verify = { limiter: tools.limiter, fetcher: verifyFetcher ?? tools.fetcher };
     await app.register(authRoutes, services);
-    await app.register(apiV1, { services, prefix: '/api/v1' });
+    await app.register(apiV1, { services, verify, prefix: '/api/v1' });
     await app.register(publicIssuerRoutes, { services, assets });
     await app.register(publicImageRoutes, { services });
     await app.register(publicCredentialRoutes, { services, assets });
+    await app.register(publicVerifyRoutes, { services, assets, ...verify });
     await app.register(sendgridWebhookRoutes, { services });
   }
   await app.register(webApp, { webDistDir: config.webDistDir });

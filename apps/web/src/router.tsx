@@ -1,3 +1,4 @@
+import { CREDENTIAL_STATES } from '@credforge/contracts';
 import type { QueryClient } from '@tanstack/react-query';
 import {
   createRootRouteWithContext,
@@ -24,6 +25,7 @@ import { AccountSettingsPage } from './pages/account-settings';
 import { AchievementEditorPage } from './pages/achievement-editor';
 import { AchievementsPage } from './pages/achievements';
 import { AwardPage } from './pages/award';
+import { AwardManyPage, BatchPage } from './pages/award-many';
 import { CredentialDetailPage, CredentialsPage } from './pages/credentials';
 import { InvitePage } from './pages/invite';
 import { LoginPage } from './pages/login';
@@ -261,11 +263,39 @@ const awardRoute = createRoute({
   },
 });
 
+const awardManyRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: '/award/many',
+  component: function AwardMany() {
+    return <AwardManyPage orgId={useOrgId()} />;
+  },
+});
+
+const batchRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: '/award/many/$batchId',
+  component: function Batch() {
+    const { batchId } = batchRoute.useParams();
+    return <BatchPage key={batchId} orgId={useOrgId()} batchId={batchId} />;
+  },
+});
+
+/** The credentials list's search and filters live in the address, so they can be shared. */
+const credentialsSearch = z.object({
+  q: z.string().optional(),
+  achievementId: z.string().optional(),
+  status: z.enum(CREDENTIAL_STATES).optional().catch(undefined),
+  batchId: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+});
+
 const credentialsRoute = createRoute({
   getParentRoute: () => orgRoute,
   path: '/credentials',
+  validateSearch: credentialsSearch,
   component: function Credentials() {
-    return <CredentialsPage orgId={useOrgId()} />;
+    return <CredentialsPage orgId={useOrgId()} filters={credentialsRoute.useSearch()} />;
   },
 });
 
@@ -335,6 +365,8 @@ const routeTree = rootRoute.addChildren([
       newAchievementRoute,
       achievementRoute,
       awardRoute,
+      awardManyRoute,
+      batchRoute,
       credentialsRoute,
       credentialRoute,
       orgIssuerRoute,

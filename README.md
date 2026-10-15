@@ -4,9 +4,10 @@
 [Open Badges 3.0](https://www.imsglobal.org/spec/ob/v3p0) digital badges.
 
 > **Status:** early development. M0 (foundations), M1 (the credential engine in `packages/ob3`),
-> M2 (accounts, organizations and issuers) and M3 (achievements, awarding one badge, delivery and
-> the public badge pages) are done. See the [design plan](docs/design-plan.md) for the architecture
-> and the roadmap.
+> M2 (accounts, organizations and issuers), M3 (achievements, awarding one badge, delivery and the
+> public badge pages) and M4 (awarding many from a CSV file, revoking and reissuing, the
+> verification tool, search and exports) are done. See the [design plan](docs/design-plan.md) for
+> the architecture and the roadmap.
 
 ## Requirements
 
@@ -33,6 +34,21 @@ printable certificate can be downloaded. A new organization waits for a platform
 (`SIGNUP_MODE=approval`), but it can already award badges to its own members' confirmed addresses.
 Uploaded images are stored in `data/uploads/` (git-ignored).
 
+Then the rest of M4:
+
+- **Award a badge → Many people (CSV file):** upload a CSV (the screen has a template to download),
+  check what each column holds and the validation report, then confirm. The worker signs and emails
+  each badge; the page follows its progress and offers the results as a CSV. Up to 10,000 rows and
+  5 MB; dates as `YYYY-MM-DD`. Until the organization is approved, only its members can be awarded.
+- **Awarded badges:** search by name or email, filter by achievement, status, upload and date,
+  export what matches (CSV, or JSON Lines with the signed credentials), and select badges to revoke.
+  A badge's own screen shows its timeline (awarded → emailed → delivered → opened → revoked) and
+  can **Reissue a corrected copy** or **Revoke** it. The worker re-signs the status list a few
+  seconds after a revocation.
+- **http://localhost:5173/verify:** check any Open Badges 3.0 credential by its address, its JSON
+  or a baked badge image, optionally against an email address. The same checks are
+  `POST /api/v1/verify`.
+
 No configuration is needed for development. To override a default (for example to try Google or
 Microsoft sign-in with development OAuth clients), copy `.env.development.example` to
 `.env.development`.
@@ -55,6 +71,7 @@ two-step verification (TOTP) before they can continue, whichever way they sign i
 | `pnpm db:generate` | Create a SQL migration from changes in `packages/db/src/schema.ts` |
 | `pnpm db:migrate` | Apply migrations to the development database |
 | `pnpm infra:down` | Stop PostgreSQL and Mailpit (data is kept) |
+| `pnpm --filter @credforge/server cli publish-status-lists` | Re-sign status lists with revocations the worker hasn't published yet (`--all` for every list) |
 
 ### Tests
 
@@ -62,7 +79,10 @@ two-step verification (TOTP) before they can continue, whichever way they sign i
 PostgreSQL: Testcontainers starts `postgres:18-alpine`, so **Docker must be running**. To use an
 existing server instead, set `TEST_DATABASE_URL` to a superuser connection string; each test file
 creates and drops its own database there. The integration suite includes a cross-tenant test that
-tries every organization-scoped endpoint against another organization's data.
+tries every organization-scoped endpoint against another organization's data. Batches, revocation
+and the worker's jobs are tested by running the job functions directly against the test database;
+verification of other issuers' credentials uses a stand-in fetcher that serves the
+`packages/ob3` sample issuer.
 
 The SendGrid transport and Event Webhook are tested without an account: requests are compared
 with what the Mail Send API expects, and webhook signatures are checked against a recorded test
@@ -78,7 +98,10 @@ checks every screen with [axe](https://github.com/dequelabs/axe-core) against th
 A and AA rules, in light and dark mode (emulated `prefers-color-scheme`) at 1280 and 375 px wide.
 It also awards a badge through the UI to the owner's own address, opens the claim link from
 Mailpit as the recipient, checks the public badge page, certificate and achievement page, and
-verifies the downloaded baked PNG with `@credforge/ob3`.
+verifies the downloaded baked PNG with `@credforge/ob3`. The M4 tests upload a CSV file and go
+through the column mapping, the validation report, awarding, progress and results (the worker must
+be running), search and filter the awarded badges, open the bulk revoke panel and the reissue form,
+revoke a badge and check its public page, and use the `/verify` page.
 Any violation fails the test. It also checks keyboard behaviour that broke before: the mobile menu
 takes focus, keeps Tab inside it and returns focus on Escape, its organization switcher is
 labelled, cancelling a confirm button returns focus to it, and step changes move focus to the new
@@ -99,7 +122,10 @@ Auth's API, confirmation and invitation links from Mailpit, a platform admin thr
 `create-platform-admin` CLI, and TOTP codes computed from the secret. The accounts use
 `e2e-<run>-…@example.test` addresses and a password generated for the run, kept in `e2e/.auth/`
 with the saved sessions (git-ignored). At the end the run declines its organization, so it leaves
-the platform approval queue. The test data stays in the development database.
+the platform approval queue, and takes its platform admin's rights away again: every new
+organization emails every platform admin, so admins left over from earlier runs slow down every
+later run's email (demote old ones with `pnpm --filter @credforge/server cli remove-platform-admin
+--email …`). The test data stays in the development database.
 
 Pass Playwright options after the script, for example `pnpm test:e2e -g "sign in"` or
 `pnpm test:e2e --ui`. A failed test keeps a trace: `pnpm --filter @credforge/e2e exec playwright
@@ -134,6 +160,10 @@ This starts `db`, runs `migrate` once, and then starts `app` and `worker`. The a
   (a DigitalOcean Space on credforge.app); `local` keeps them in the `uploads` volume, which then
   needs backing up with the database. Images are always served through the app at permanent
   `{PUBLIC_BASE_URL}` URLs, so the storage can change without breaking issued badges.
+- **The worker** issues CSV batches, sends email and re-signs status lists after revocations: keep
+  it running. Verification (`/verify`, `POST /api/v1/verify`) is rate limited per client IP
+  (`VERIFY_RATE_LIMIT`, default 20 a minute), so set `TRUST_PROXY` behind nginx; `/status/` is
+  never limited. `node dist/cli.js publish-status-lists` re-signs any lists the worker missed.
 - **Google and Microsoft sign-in** turn on when their client ID and secret are set. Redirect URIs
   are `{PUBLIC_BASE_URL}/api/auth/callback/google` and `…/callback/microsoft`. For Microsoft, add
   the optional ID token claim `xms_edov`; without it credforge sends its own confirmation email
@@ -180,8 +210,10 @@ work. Values in angle brackets come from the SendGrid and DigitalOcean control p
    `S3_BUCKET=credforge-prod`.
 
 No DNS record is needed for Spaces. nginx in front of the app needs `client_max_body_size 10m`
-(image uploads and webhook batches) and must not rate-limit `/status/`: validators fetch the
-status list for every check (the 1EdTech validator about 10 times).
+(image uploads, CSV files up to 5 MB, webhook batches) and must not rate-limit `/status/`:
+validators fetch the status list for every check (the 1EdTech validator about 10 times). Uploaded
+CSV files are kept privately under `orgs/{orgId}/imports/` for 30 days; exports are streamed and
+never stored.
 
 ## Repository layout
 

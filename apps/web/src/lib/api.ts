@@ -2,7 +2,11 @@ import type {
   Achievement,
   AchievementStatus,
   AuditEventPage,
+  BatchDetails,
+  BatchPage,
+  BatchRowPage,
   CredentialDetails,
+  CredentialFilters,
   CredentialPage,
   InstanceInfo,
   Invitation,
@@ -40,13 +44,13 @@ export class ApiError extends Error {
 
 export async function api<T>(
   path: string,
-  init: { method?: string; body?: unknown; file?: File } = {},
+  init: { method?: string; body?: unknown; file?: File; contentType?: string } = {},
 ): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
     method: init.method ?? 'GET',
     credentials: 'same-origin',
     headers: init.file
-      ? { 'content-type': init.file.type || 'application/octet-stream' }
+      ? { 'content-type': init.contentType ?? (init.file.type || 'application/octet-stream') }
       : init.body === undefined
         ? undefined
         : { 'content-type': 'application/json' },
@@ -64,6 +68,19 @@ export const patch = <T>(path: string, body: unknown) => api<T>(path, { method: 
 export const del = (path: string) => api<void>(path, { method: 'DELETE' });
 /** Uploads a file as the raw request body (image uploads). */
 export const upload = <T>(path: string, file: File) => api<T>(path, { method: 'PUT', file });
+/** Uploads a CSV file as the raw body (whatever type the browser guessed for it). */
+export const uploadCsv = <T>(path: string, file: File) =>
+  api<T>(path, { method: 'POST', file, contentType: 'text/csv' });
+
+/** Search and filters as a query string, without empty values. */
+export function filterQuery(filters: CredentialFilters): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (typeof value === 'string' && value.trim()) params.set(key, value.trim());
+  }
+  const query = params.toString();
+  return query ? `?${query}` : '';
+}
 
 // ---- queries ----
 
@@ -129,6 +146,21 @@ export const queries = {
       queryKey: ['org', orgId, 'credential', credentialId],
       queryFn: () => api<CredentialDetails>(`/orgs/${orgId}/credentials/${credentialId}`),
     }),
+  batches: (orgId: string) =>
+    queryOptions({
+      queryKey: ['org', orgId, 'batches'],
+      queryFn: () => api<BatchPage>(`/orgs/${orgId}/batches?limit=20`),
+    }),
+  batch: (orgId: string, batchId: string) =>
+    queryOptions({
+      queryKey: ['org', orgId, 'batch', batchId],
+      queryFn: () => api<BatchDetails>(`/orgs/${orgId}/batches/${batchId}`),
+    }),
+  batchRows: (orgId: string, batchId: string, query: string) =>
+    queryOptions({
+      queryKey: ['org', orgId, 'batch', batchId, 'rows', query],
+      queryFn: () => api<BatchRowPage>(`/orgs/${orgId}/batches/${batchId}/rows?${query}`),
+    }),
   platformOrgs: (status: OrgStatus | 'all') =>
     queryOptions({
       queryKey: ['platform', 'orgs', status],
@@ -139,10 +171,13 @@ export const queries = {
     }),
 };
 
-export async function fetchCredentialPage(orgId: string, before?: string) {
-  return api<CredentialPage>(
-    `/orgs/${orgId}/credentials${before ? `?before=${encodeURIComponent(before)}` : ''}`,
-  );
+export async function fetchCredentialPage(
+  orgId: string,
+  filters: CredentialFilters = {},
+  before?: string,
+) {
+  const query = filterQuery({ ...filters, ...(before && { before }) } as CredentialFilters);
+  return api<CredentialPage>(`/orgs/${orgId}/credentials${query}`);
 }
 
 export async function fetchAuditPage(orgId: string, before?: number) {

@@ -1,0 +1,62 @@
+import type { Queryable } from '@credforge/db';
+import type { PgBoss } from 'pg-boss';
+import { transactionDatabase } from '../email/outbox';
+import { QUEUES } from './queues';
+
+/** Seconds a status list waits before it is re-signed, so a burst of revocations signs once. */
+export const STATUS_LIST_DEBOUNCE_SECONDS = 5;
+
+/**
+ * Background work the app hands to the worker. With `tx`, the job is written in that
+ * transaction, so it exists if and only if the change that needs it commits.
+ *
+ * Both jobs are keyed by what they work on and their queues allow one waiting and one running
+ * job per key (pg-boss `stately`), so asking again while a job waits adds nothing. The work is
+ * recorded in the database first (`status_list.needs_publish`, a batch's `pending` rows), and the
+ * worker's sweep picks up anything whose job was lost.
+ */
+export interface JobQueue {
+  /** Issues a confirmed batch's pending rows. */
+  issueBatch(batchId: string, options?: { tx?: Queryable }): Promise<void>;
+  /** Re-signs and publishes a status list a few seconds from now. */
+  publishStatusList(statusListId: string, options?: { tx?: Queryable }): Promise<void>;
+}
+
+export function createJobQueue(boss: Pick<PgBoss, 'send'>): JobQueue {
+  const db = (tx?: Queryable) => (tx ? { db: transactionDatabase(tx) } : {});
+  return {
+    async issueBatch(batchId, options) {
+      await boss.send(QUEUES.batch, { batchId }, { singletonKey: batchId, ...db(options?.tx) });
+    },
+    async publishStatusList(statusListId, options) {
+      await boss.send(
+        QUEUES.statusList,
+        { statusListId },
+        {
+          singletonKey: statusListId,
+          startAfter: STATUS_LIST_DEBOUNCE_SECONDS,
+          ...db(options?.tx),
+        },
+      );
+    },
+  };
+}
+
+/** Records what was asked for. Used by tests, which run the jobs themselves. */
+export function createMemoryJobQueue(): JobQueue & {
+  batches: string[];
+  statusLists: string[];
+} {
+  const batches: string[] = [];
+  const statusLists: string[] = [];
+  return {
+    batches,
+    statusLists,
+    async issueBatch(batchId) {
+      batches.push(batchId);
+    },
+    async publishStatusList(statusListId) {
+      statusLists.push(statusListId);
+    },
+  };
+}

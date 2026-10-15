@@ -1,4 +1,4 @@
-import { and, desc, eq, type Queryable, statusList } from '@credforge/db';
+import { and, type Database, desc, eq, issuer, type Queryable, statusList } from '@credforge/db';
 import {
   allocateRandomIndex,
   Bitstring,
@@ -9,7 +9,10 @@ import {
   MIN_STATUS_LIST_LENGTH,
   type Signer,
 } from '@credforge/ob3';
-import { issuerUrl } from '../issuers/service';
+import type { Config } from '../config';
+import type { KeyEncryption } from '../crypto/key-encryption';
+import { loadFiles } from '../files/service';
+import { issuerProfileDocument, issuerUrl, keysForIssuers, loadSigner } from '../issuers/service';
 
 export type StatusListRow = typeof statusList.$inferSelect;
 
@@ -112,4 +115,111 @@ async function createStatusList(
     .returning();
   if (!row) throw new Error('Insert returned no row.');
   return row;
+}
+
+/** A credential's place in a status list. */
+export interface StatusEntry {
+  listId: string;
+  index: number;
+}
+
+/**
+ * Sets the bits for revoked credentials in their lists' `statuses` and marks each list for
+ * publishing. Call in the revoking transaction; the signed list is updated by the worker
+ * (`publishStatusList`), a few seconds later. Returns the ids of the lists that changed.
+ */
+export async function setStatusBits(tx: Queryable, entries: StatusEntry[]): Promise<string[]> {
+  const byList = new Map<string, number[]>();
+  for (const entry of entries) {
+    byList.set(entry.listId, [...(byList.get(entry.listId) ?? []), entry.index]);
+  }
+  const changed: string[] = [];
+  // Always lock lists in the same order, so two revocations can't wait on each other.
+  for (const listId of [...byList.keys()].sort()) {
+    const [list] = await tx
+      .select({ id: statusList.id, statuses: statusList.statuses })
+      .from(statusList)
+      .where(eq(statusList.id, listId))
+      .for('update');
+    if (!list) throw new Error(`Status list ${listId} not found.`);
+    const bits = new Bitstring(list.statuses);
+    let dirty = false;
+    for (const index of byList.get(listId) ?? []) {
+      if (!bits.get(index)) {
+        bits.set(index, true);
+        dirty = true;
+      }
+    }
+    if (!dirty) continue;
+    await tx
+      .update(statusList)
+      .set({ statuses: Buffer.from(bits.toBytes()), needsPublish: true, updatedAt: new Date() })
+      .where(eq(statusList.id, listId));
+    changed.push(listId);
+  }
+  return changed;
+}
+
+export interface PublishServices {
+  db: Database;
+  config: Pick<Config, 'publicBaseUrl'>;
+  keys: KeyEncryption;
+}
+
+/**
+ * Re-signs a list whose bits changed and publishes it as the next version (design plan §8.6).
+ * Returns false when there was nothing to publish. Throws (so the job retries) when the issuer
+ * has no active key to sign with.
+ */
+export async function publishStatusList(
+  services: PublishServices,
+  statusListId: string,
+): Promise<boolean> {
+  const base = services.config.publicBaseUrl;
+  return services.db.transaction(async (tx) => {
+    const [list] = await tx
+      .select()
+      .from(statusList)
+      .where(eq(statusList.id, statusListId))
+      .for('update');
+    if (!list?.needsPublish) return false;
+    const [issuerRow] = await tx.select().from(issuer).where(eq(issuer.id, list.issuerId));
+    if (!issuerRow) throw new Error(`Issuer ${list.issuerId} not found.`);
+    const issuerKeys = await keysForIssuers(tx, list.orgId, [issuerRow.id]);
+    const activeKey = issuerKeys.find((key) => key.status === 'active');
+    if (!activeKey) throw new Error(`Issuer ${issuerRow.id} has no active signing key.`);
+    const logo = issuerRow.imageFileId
+      ? (await loadFiles(tx, [issuerRow.imageFileId])).get(issuerRow.imageFileId)
+      : undefined;
+    const signer = await loadSigner(services.keys, base, activeKey);
+    const issuerProfile = issuerProfileDocument(base, issuerRow, issuerKeys, logo);
+    const document = await issueStatusListCredential(
+      {
+        id: statusListUrl(base, list.issuerId, list.listNumber),
+        issuer: issuerUrl(base, list.issuerId),
+        bitstring: new Bitstring(list.statuses),
+      },
+      { signer, issuerProfile },
+    );
+    await tx
+      .update(statusList)
+      .set({
+        document: document as unknown as Record<string, unknown>,
+        version: list.version + 1,
+        publishedAt: new Date(),
+        needsPublish: false,
+        updatedAt: new Date(),
+      })
+      .where(eq(statusList.id, list.id));
+    return true;
+  });
+}
+
+/** Lists with changes not yet published: the sweep's safety net for a lost job. */
+export async function listsWaitingToPublish(db: Queryable): Promise<string[]> {
+  const rows = await db
+    .select({ id: statusList.id })
+    .from(statusList)
+    .where(eq(statusList.needsPublish, true));
+  return rows.map((row) => row.id);
 }

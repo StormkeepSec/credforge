@@ -471,12 +471,167 @@ export const statusList = pgTable(
     version: integer('version').notNull().default(1),
     document: jsonb('document').$type<Record<string, unknown>>().notNull(),
     publishedAt: timestamptz('published_at').notNull().defaultNow(),
+    /**
+     * Set when a bit in `statuses` changed after `document` was signed (a revocation). The worker
+     * re-signs and publishes the list, then clears it (design plan §8.6).
+     */
+    needsPublish: boolean('needs_publish').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (table) => [
     uniqueIndex('status_list_issuer_number_idx').on(table.issuerId, table.listNumber),
+    index('status_list_needs_publish_idx').on(table.id).where(sql`${table.needsPublish}`),
     check('status_list_purpose_check', oneOf(table.purpose, STATUS_PURPOSE_VALUES)),
+  ],
+);
+
+// ---- Batches (award many from a CSV file or JSON rows) ----
+
+export const BATCH_SOURCE_VALUES = ['csv', 'api'] as const;
+/**
+ * `draft`: uploaded; the column mapping and options can still change. `queued`: confirmed, the
+ * job is waiting. `running`: the worker is issuing. `completed`: every row was handled (some may
+ * have failed). `failed`: the batch stopped before the end (see `error`).
+ */
+export const BATCH_STATUS_VALUES = ['draft', 'queued', 'running', 'completed', 'failed'] as const;
+
+/** What a CSV column holds. `custom` columns are kept with the credential but not signed. */
+export const BATCH_COLUMN_TARGETS = [
+  'name',
+  'firstName',
+  'lastName',
+  'email',
+  'issuedOn',
+  'expiresOn',
+  'evidenceUrl',
+  'custom',
+  'ignore',
+] as const;
+export type BatchColumnTarget = (typeof BATCH_COLUMN_TARGETS)[number];
+
+/** One column of the uploaded file and where its values go. */
+export interface BatchColumn {
+  header: string;
+  target: BatchColumnTarget;
+}
+
+export interface BatchOptions {
+  /** Email each recipient their claim link. */
+  sendEmail: boolean;
+  /** Award again to people who already hold the achievement (default: skip them). */
+  awardExisting: boolean;
+}
+
+/**
+ * A bulk award (design plan §8.3). Rows live in `issuance_batch_row`; counts are computed from
+ * them. A batch is issued by the worker in chunks, and every row is issued at most once.
+ */
+export const issuanceBatch = pgTable(
+  'issuance_batch',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organization.id),
+    achievementId: uuid('achievement_id')
+      .notNull()
+      .references(() => achievement.id),
+    source: text('source', { enum: BATCH_SOURCE_VALUES }).notNull(),
+    /** The uploaded CSV (a private `csv_import` file), deleted after 30 days. */
+    fileId: uuid('file_id').references(() => file.id, { onDelete: 'set null' }),
+    fileName: text('file_name'),
+    /** Whether the file's first line holds column names. */
+    hasHeader: boolean('has_header').notNull().default(true),
+    columns: jsonb('columns').$type<BatchColumn[]>().notNull().default([]),
+    options: jsonb('options')
+      .$type<BatchOptions>()
+      .notNull()
+      .default({ sendEmail: true, awardExisting: false }),
+    status: text('status', { enum: BATCH_STATUS_VALUES }).notNull().default('draft'),
+    totalRows: integer('total_rows').notNull().default(0),
+    /** Why a `failed` batch stopped. */
+    error: text('error'),
+    createdByType: text('created_by_type', { enum: ['user', 'api_key'] }).notNull(),
+    createdById: text('created_by_id'),
+    /** Who confirmed it: the worker issues its credentials on their behalf. */
+    confirmedById: text('confirmed_by_id'),
+    confirmedAt: timestamptz('confirmed_at'),
+    startedAt: timestamptz('started_at'),
+    finishedAt: timestamptz('finished_at'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    index('issuance_batch_org_created_idx').on(table.orgId, table.createdAt),
+    index('issuance_batch_active_idx')
+      .on(table.status)
+      .where(sql`${table.status} in ('queued', 'running')`),
+    check('issuance_batch_status_check', oneOf(table.status, BATCH_STATUS_VALUES)),
+    check('issuance_batch_source_check', oneOf(table.source, BATCH_SOURCE_VALUES)),
+    check('issuance_batch_created_by_type_check', oneOf(table.createdByType, ['user', 'api_key'])),
+  ],
+);
+
+/** A row's values once mapped and normalized. */
+export interface BatchRowValues {
+  name: string;
+  email: string;
+  issuedOn?: string;
+  expiresOn?: string;
+  evidenceUrl?: string;
+  custom: Record<string, string>;
+}
+
+/** A problem found when a row was checked. */
+export interface BatchRowIssue {
+  /** The mapped field, e.g. `email`. */
+  field: string;
+  message: string;
+}
+
+/**
+ * What checking a row found. `ready`: will be awarded. `invalid`: a required value is missing or
+ * wrong. `duplicate`: the same email appears on an earlier row. `existing`: the person already
+ * holds this achievement (skipped unless the batch awards again).
+ */
+export const BATCH_ROW_VALIDATION_VALUES = ['ready', 'invalid', 'duplicate', 'existing'] as const;
+/** Before confirming every row is `draft`; then `pending` until it is `issued` or `failed`. */
+export const BATCH_ROW_STATUS_VALUES = ['draft', 'pending', 'issued', 'failed', 'skipped'] as const;
+
+export const issuanceBatchRow = pgTable(
+  'issuance_batch_row',
+  {
+    batchId: uuid('batch_id')
+      .notNull()
+      .references(() => issuanceBatch.id, { onDelete: 'cascade' }),
+    /** 1 for the first data row (the header line isn't counted). */
+    rowNumber: integer('row_number').notNull(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organization.id),
+    /** The row as read from the file, so the mapping can change. */
+    cells: jsonb('cells').$type<string[]>().notNull(),
+    values: jsonb('values').$type<BatchRowValues>(),
+    validation: text('validation', { enum: BATCH_ROW_VALIDATION_VALUES })
+      .notNull()
+      .default('invalid'),
+    issues: jsonb('issues').$type<BatchRowIssue[]>().notNull().default([]),
+    status: text('status', { enum: BATCH_ROW_STATUS_VALUES }).notNull().default('draft'),
+    credentialId: uuid('credential_id').references((): AnyPgColumn => credential.id),
+    /** A problem code (`send_limit_reached`, …) when issuing failed or the row was skipped. */
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    processedAt: timestamptz('processed_at'),
+  },
+  (table) => [
+    primaryKey({ columns: [table.batchId, table.rowNumber] }),
+    index('issuance_batch_row_status_idx').on(table.batchId, table.status),
+    check(
+      'issuance_batch_row_validation_check',
+      oneOf(table.validation, BATCH_ROW_VALIDATION_VALUES),
+    ),
+    check('issuance_batch_row_status_check', oneOf(table.status, BATCH_ROW_STATUS_VALUES)),
   ],
 );
 
@@ -485,6 +640,8 @@ export const statusList = pgTable(
 export const CREDENTIAL_STATUS_VALUES = ['draft', 'issued', 'revoked'] as const;
 export const CREDENTIAL_VISIBILITY_VALUES = ['public', 'hidden'] as const;
 export const ISSUED_BY_TYPES = ['user', 'api_key'] as const;
+/** `revoked` by the issuer, or `superseded` by a corrected copy (reissue, design plan §8.6). */
+export const REVOCATION_KIND_VALUES = ['revoked', 'superseded'] as const;
 
 export interface EvidenceData {
   id?: string;
@@ -513,8 +670,9 @@ export const credential = pgTable(
     achievementRevision: integer('achievement_revision').notNull(),
     /** The badge image it was issued with (for baking). */
     imageFileId: uuid('image_file_id').references(() => file.id),
-    /** CSV batch (M4). */
-    batchId: uuid('batch_id'),
+    /** The batch that awarded it, and its row there (at most one credential per row). */
+    batchId: uuid('batch_id').references((): AnyPgColumn => issuanceBatch.id),
+    batchRowNumber: integer('batch_row_number'),
     /** Normalized (trimmed, lowercase). Never shown on public pages. */
     recipientEmail: text('recipient_email').notNull(),
     recipientName: text('recipient_name').notNull(),
@@ -538,8 +696,16 @@ export const credential = pgTable(
     /** When the recipient first opened their claim link ("opened" in the delivery timeline). */
     acceptedAt: timestamptz('accepted_at'),
     revokedAt: timestamptz('revoked_at'),
+    /** Why it was revoked, for the org only (required when revoking). */
     revocationReason: text('revocation_reason'),
+    /** Shown on the public page, if the issuer gave one. */
+    revocationPublicReason: text('revocation_public_reason'),
+    revocationKind: text('revocation_kind', { enum: REVOCATION_KIND_VALUES }),
+    /** The corrected copy that superseded this one, and the other way round. */
     replacedById: uuid('replaced_by_id').references((): AnyPgColumn => credential.id),
+    replacesId: uuid('replaces_id').references((): AnyPgColumn => credential.id),
+    /** Extra columns from a CSV batch, kept for the org's records; not signed or shown publicly. */
+    customFields: jsonb('custom_fields').$type<Record<string, string>>().notNull().default({}),
     issuedByType: text('issued_by_type', { enum: ISSUED_BY_TYPES }).notNull(),
     issuedById: text('issued_by_id'),
     createdAt: createdAt(),
@@ -549,10 +715,18 @@ export const credential = pgTable(
     index('credential_org_created_idx').on(table.orgId, table.createdAt),
     index('credential_achievement_idx').on(table.achievementId),
     index('credential_org_email_idx').on(table.orgId, table.recipientEmail),
+    index('credential_org_batch_idx').on(table.orgId, table.batchId),
     uniqueIndex('credential_status_entry_idx').on(table.statusListId, table.statusListIndex),
+    uniqueIndex('credential_batch_row_idx')
+      .on(table.batchId, table.batchRowNumber)
+      .where(sql`${table.batchId} is not null`),
     check('credential_status_check', oneOf(table.status, CREDENTIAL_STATUS_VALUES)),
     check('credential_visibility_check', oneOf(table.visibility, CREDENTIAL_VISIBILITY_VALUES)),
     check('credential_issued_by_type_check', oneOf(table.issuedByType, ISSUED_BY_TYPES)),
+    check(
+      'credential_revocation_kind_check',
+      sql`"revocation_kind" is null or ${oneOf(table.revocationKind, REVOCATION_KIND_VALUES)}`,
+    ),
   ],
 );
 

@@ -1,5 +1,6 @@
 import {
   and,
+  credential,
   type Database,
   type EMAIL_STATUS_VALUES,
   type EmailEventData,
@@ -41,14 +42,24 @@ export function createDeliveryTracker(db: Database): DeliveryTracker {
   return {
     async beforeSend(id) {
       const [row] = await db
-        .select({ status: emailMessage.status, orgStatus: organization.status })
+        .select({
+          status: emailMessage.status,
+          orgStatus: organization.status,
+          credentialStatus: credential.status,
+        })
         .from(emailMessage)
         .innerJoin(organization, eq(emailMessage.orgId, organization.id))
+        .leftJoin(credential, eq(emailMessage.credentialId, credential.id))
         .where(eq(emailMessage.id, id));
       if (!row) return { send: false, reason: 'unknown message' };
       if (row.status !== 'queued') return { send: false, reason: `already ${row.status}` };
-      if (row.orgStatus === 'suspended' || row.orgStatus === 'declined') {
-        const reason = `Not sent: the organization is ${row.orgStatus}.`;
+      const reason =
+        row.orgStatus === 'suspended' || row.orgStatus === 'declined'
+          ? `Not sent: the organization is ${row.orgStatus}.`
+          : row.credentialStatus === 'revoked'
+            ? 'Not sent: the badge was revoked before the email went out.'
+            : null;
+      if (reason) {
         await db
           .update(emailMessage)
           .set({ status: 'failed', lastError: reason, updatedAt: new Date() })

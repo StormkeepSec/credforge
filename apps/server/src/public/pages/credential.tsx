@@ -31,6 +31,8 @@ export interface CredentialView {
   validUntil: Date | null;
   state: CredentialState;
   revokedAt: Date | null;
+  /** `superseded`: replaced by a corrected copy. The public reason, if the issuer gave one. */
+  revocation: { kind: 'revoked' | 'superseded'; publicReason: string | null } | null;
   evidence: { url?: string; name?: string; narrative?: string }[];
   downloads: { png: string; svg: string | null; json: string; certificate: string };
 }
@@ -79,7 +81,7 @@ export function StatusPill({ state }: { state: CredentialState }) {
   );
 }
 
-function CheckIcon({ outcome }: { outcome: 'passed' | 'failed' | 'skipped' }) {
+export function CheckIcon({ outcome }: { outcome: 'passed' | 'failed' | 'skipped' }) {
   const color =
     outcome === 'passed' ? 'text-success' : outcome === 'failed' ? 'text-danger' : 'text-ink-muted';
   return (
@@ -267,6 +269,23 @@ export function CredentialPage({
                   )}
                 </p>
               </div>
+              {c.revocation && (
+                <div
+                  role="note"
+                  className="mt-6 rounded-lg border border-danger/40 bg-danger/5 p-4 text-sm"
+                >
+                  <p className="font-semibold">
+                    {c.revocation.kind === 'superseded'
+                      ? `${c.issuer.name} replaced this badge with a corrected copy.`
+                      : `${c.issuer.name} revoked this badge.`}
+                  </p>
+                  {c.revocation.publicReason && (
+                    <p className="mt-1 text-ink-muted">
+                      Reason given by the issuer: {c.revocation.publicReason}
+                    </p>
+                  )}
+                </div>
+              )}
               <ul aria-label="Downloads" className="mt-8 flex flex-wrap gap-3">
                 <li>
                   <a href={c.downloads.png} download className={button}>

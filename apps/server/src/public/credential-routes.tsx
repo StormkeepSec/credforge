@@ -1,6 +1,6 @@
 import { achievementTypeLabel } from '@credforge/contracts';
 import { achievement, and, credential, eq, issuer, organization, statusList } from '@credforge/db';
-import { bakePng, bakeSvg } from '@credforge/ob3';
+import { bakePng, bakeSvg, type CredentialVerification } from '@credforge/ob3';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import QRCode from 'qrcode';
 import { achievementDocument, achievementUrl, snapshotOf } from '../achievements/service';
@@ -9,6 +9,7 @@ import { isSameOrigin } from '../api/v1';
 import { recordAudit } from '../audit/audit';
 import {
   type CredentialRow,
+  credentialState,
   credentialUrl,
   hashClaimToken,
   isValidClaimToken,
@@ -23,7 +24,7 @@ import { UPLOAD_CSP } from './image-routes';
 import { negotiate } from './negotiate';
 import { AchievementPage } from './pages/achievement';
 import { CertificatePage } from './pages/certificate';
-import { CredentialPage, type CredentialState, type CredentialView } from './pages/credential';
+import { CredentialPage, type CredentialView } from './pages/credential';
 
 /** JSON first for verifiers that send no Accept header (or `*\/*`); browsers ask for HTML. */
 const DOCUMENT_OFFERS = [
@@ -70,13 +71,6 @@ const asRecord = (value: unknown): Json =>
 const asString = (value: unknown): string | undefined =>
   typeof value === 'string' ? value : undefined;
 const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
-
-export function credentialState(row: CredentialRow, now = new Date()): CredentialState {
-  if (row.status === 'revoked') return 'revoked';
-  if (row.validFrom > now) return 'not_yet_valid';
-  if (row.validUntil && row.validUntil < now) return 'expired';
-  return 'valid';
-}
 
 /** What the page shows, from the signed document: the credential as it was issued. */
 function credentialView(
@@ -132,6 +126,10 @@ function credentialView(
     validUntil: row.validUntil,
     state: credentialState(row),
     revokedAt: row.revokedAt,
+    revocation:
+      row.status === 'revoked'
+        ? { kind: row.revocationKind ?? 'revoked', publicReason: row.revocationPublicReason }
+        : null,
     evidence: asArray(doc.evidence)
       .map(asRecord)
       .map((item) => ({
@@ -144,6 +142,30 @@ function credentialView(
       svg: image?.mimeType === 'image/svg+xml' ? `${base}/badge.svg` : null,
       json: `${base}/credential.json`,
       certificate: `${base}/certificate`,
+    },
+  };
+}
+
+/**
+ * Between a revocation and the worker re-signing the status list (a few seconds), the published
+ * list still has the old bit. The page says what the issuer did rather than what the list says.
+ */
+export function withRevocation(
+  row: CredentialRow,
+  verification: CredentialVerification,
+): CredentialVerification {
+  if (row.status !== 'revoked' || verification.checks.status.outcome === 'failed') {
+    return verification;
+  }
+  return {
+    verified: false,
+    checks: {
+      ...verification.checks,
+      status: {
+        outcome: 'failed',
+        message:
+          'The issuer has revoked this credential. Its signed status list is being updated and will show it within a minute.',
+      },
     },
   };
 }
@@ -285,7 +307,17 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
     }
 
     const view = credentialView(base, row, await imageOf(row));
-    const verification = await verifyLocalCredential(db, base, row.id, row.document);
+    // Cached per list version: a re-signed list (after a revocation) is checked afresh.
+    const [list] = row.statusListId
+      ? await db
+          .select({ version: statusList.version })
+          .from(statusList)
+          .where(eq(statusList.id, row.statusListId))
+      : [];
+    const verification = withRevocation(
+      row,
+      await verifyLocalCredential(db, base, `${row.id}:${list?.version ?? 0}`, row.document),
+    );
     return sendHtml(
       reply,
       renderDocument(

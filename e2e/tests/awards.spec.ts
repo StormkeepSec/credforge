@@ -141,7 +141,7 @@ test.describe('as an organization owner', () => {
     await expectAccessible(page, 'awarded badges');
 
     await openScreen(page, `/app/orgs/${org.id}/credentials/${credentialId}`, 'E2E Owner');
-    await expect(page.getByRole('heading', { name: 'Delivery' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Timeline' })).toBeVisible();
     await expectAccessible(page, 'credential delivery');
   });
 

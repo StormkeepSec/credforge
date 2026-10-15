@@ -1,21 +1,29 @@
 import { parseArgs } from 'node:util';
 import { emailField } from '@credforge/contracts';
-import { createDatabase, eq, user } from '@credforge/db';
+import { createDatabase, eq, statusList, user } from '@credforge/db';
 import { recordAudit } from './audit/audit';
 import { createAuth } from './auth/auth';
 import { loadConfigOrExit } from './config';
+import { createKeyEncryption } from './crypto/key-encryption';
 import { loadDevEnvFile } from './dev-env';
 import { createMemoryOutbox } from './email/outbox';
+import { listsWaitingToPublish, publishStatusList } from './status-lists/service';
 
 const USAGE = `credforge command line
 
 Usage:
   node dist/cli.js create-platform-admin --email <address> [--name <name>]
+  node dist/cli.js remove-platform-admin --email <address>
+  node dist/cli.js publish-status-lists [--all]
 
 Commands:
   create-platform-admin   Make a user a platform admin (approves and suspends organizations).
                           Creates the account if it doesn't exist yet and prints a link to set
                           its password. Run it once to set up a new instance.
+  remove-platform-admin   Take away a user's platform admin rights (the account stays).
+  publish-status-lists    Re-sign and publish status lists with revocations not yet published
+                          (the worker does this within seconds; use it if the worker was down).
+                          --all re-signs every list.
 
 In docker compose:  docker compose exec app node dist/cli.js create-platform-admin --email you@example.org`;
 
@@ -108,12 +116,81 @@ async function createPlatformAdmin(args: string[]) {
   }
 }
 
+async function removePlatformAdmin(args: string[]) {
+  const { values } = parseArgs({ args, options: { email: { type: 'string' } } });
+  const parsedEmail = emailField.safeParse(values.email ?? '');
+  if (!parsedEmail.success) {
+    console.error('Give a valid --email address.\n');
+    console.error(USAGE);
+    return 2;
+  }
+  const email = parsedEmail.data;
+  const config = loadConfigOrExit();
+  const { db, pool } = createDatabase(config.databaseUrl, {
+    applicationName: 'credforge-cli',
+    max: 2,
+  });
+  try {
+    const [existing] = await db.select().from(user).where(eq(user.email, email));
+    if (!existing?.isPlatformAdmin) {
+      console.log(`${email} isn't a platform admin.`);
+      return 0;
+    }
+    await db.transaction(async (tx) => {
+      await tx
+        .update(user)
+        .set({ isPlatformAdmin: false, updatedAt: new Date() })
+        .where(eq(user.id, existing.id));
+      await recordAudit(tx, {
+        actor: CLI_ACTOR,
+        action: 'user.platform_admin_revoked',
+        target: { type: 'user', id: existing.id },
+        data: { email },
+      });
+    });
+    console.log(`${email} is no longer a platform admin.`);
+    return 0;
+  } finally {
+    await pool.end();
+  }
+}
+
+async function publishStatusLists(args: string[]) {
+  const { values } = parseArgs({ args, options: { all: { type: 'boolean' } } });
+  const config = loadConfigOrExit();
+  const { db, pool } = createDatabase(config.databaseUrl, {
+    applicationName: 'credforge-cli',
+    max: 2,
+  });
+  try {
+    const ids = values.all
+      ? (await db.select({ id: statusList.id }).from(statusList)).map((row) => row.id)
+      : await listsWaitingToPublish(db);
+    if (values.all) {
+      for (const id of ids) {
+        await db.update(statusList).set({ needsPublish: true }).where(eq(statusList.id, id));
+      }
+    }
+    const services = { db, config, keys: createKeyEncryption(config.masterKey) };
+    let published = 0;
+    for (const id of ids) if (await publishStatusList(services, id)) published++;
+    console.log(`Published ${published} status ${published === 1 ? 'list' : 'lists'}.`);
+    return 0;
+  } finally {
+    await pool.end();
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
   loadDevEnvFile();
   const [command, ...rest] = argv;
   switch (command) {
     case 'create-platform-admin':
       return createPlatformAdmin(rest);
+    case 'remove-platform-admin':
+      return removePlatformAdmin(rest);
+    case 'publish-status-lists':
+      return publishStatusLists(rest);
     case undefined:
     case 'help':
     case '--help':

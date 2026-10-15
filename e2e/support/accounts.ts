@@ -91,6 +91,18 @@ export async function makePlatformAdmin(email: string) {
   ]);
 }
 
+/** Takes the rights away again at the end of a run, so admins don't pile up across runs. */
+export async function removePlatformAdmin(email: string) {
+  await runPnpm([
+    '--filter',
+    '@credforge/server',
+    'cli',
+    'remove-platform-admin',
+    '--email',
+    email,
+  ]);
+}
+
 export async function me(request: APIRequestContext) {
   const response = await ok(await request.get('/api/v1/me'), 'GET /api/v1/me');
   return (await response.json()) as { mfa: { state: string }; user: { email: string } };

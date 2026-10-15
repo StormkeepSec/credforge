@@ -121,7 +121,8 @@ setup('seed accounts, an organization and invitations', async ({ playwright }) =
     seed(SIGNED_IN.invitee, (request) => signUpAndConfirm(request, invitee)),
   ]);
 
-  const inviteLink = await mailLink(invitee.email, LINKS.invitation);
+  // Queued behind the new org's notice to every platform admin, so it can take a while.
+  const inviteLink = await mailLink(invitee.email, LINKS.invitation, 60_000);
   saveFixtures({
     runId,
     password,

@@ -5,6 +5,8 @@ import {
   eq,
   file,
   invitation,
+  issuanceBatch,
+  issuanceBatchRow,
   issuer,
   member,
   organization,
@@ -31,6 +33,7 @@ interface Tenant {
   invitationId: string;
   achievementId: string;
   credentialId: string;
+  batchId: string;
 }
 
 let png: Buffer;
@@ -81,7 +84,17 @@ async function tenant(name: string): Promise<Tenant> {
   });
   const credentialId = (awarded.json() as { id: string }).id;
   if (!credentialId) throw new Error(`Award failed: ${awarded.body}`);
-  return { owner, orgId, issuerId, memberId, invitationId, achievementId, credentialId };
+  const batch = await owner.upload(
+    `/api/v1/orgs/${orgId}/batches?achievementId=${achievementId}`,
+    Buffer.from(`Name,Email
+${name} Learner,learner-${orgId}@example.org
+`),
+    'text/csv',
+    'POST',
+  );
+  const batchId = (batch.json() as { id: string }).id;
+  if (!batchId) throw new Error(`Batch failed: ${batch.body}`);
+  return { owner, orgId, issuerId, memberId, invitationId, achievementId, credentialId, batchId };
 }
 
 beforeAll(async () => {
@@ -100,7 +113,13 @@ interface Case {
   route: string;
   body?: unknown;
   /** Has an id of a resource inside the org. */
-  resource?: 'memberId' | 'invitationId' | 'issuerId' | 'achievementId' | 'credentialId';
+  resource?:
+    | 'memberId'
+    | 'invitationId'
+    | 'issuerId'
+    | 'achievementId'
+    | 'credentialId'
+    | 'batchId';
   /** Sends an image file as the body (uploads). */
   upload?: true;
 }
@@ -160,6 +179,40 @@ const CASES: Case[] = [
   { method: 'POST', route: '/credentials/preview', body: { achievementId: crypto.randomUUID() } },
   { method: 'GET', route: '/credentials/:credentialId', resource: 'credentialId' },
   { method: 'POST', route: '/credentials/:credentialId/resend', resource: 'credentialId' },
+  {
+    method: 'POST',
+    route: '/credentials/:credentialId/revoke',
+    resource: 'credentialId',
+    body: { reason: 'Intrusion' },
+  },
+  {
+    method: 'POST',
+    route: '/credentials/:credentialId/reissue',
+    resource: 'credentialId',
+    body: { recipient: { email: 'intruder@example.org' } },
+  },
+  {
+    method: 'POST',
+    route: '/credentials/revoke',
+    body: { credentialIds: [crypto.randomUUID()], reason: 'Intrusion' },
+  },
+  { method: 'GET', route: '/batches' },
+  { method: 'GET', route: '/batches/template.csv' },
+  {
+    method: 'POST',
+    route: '/batches',
+    body: { achievementId: crypto.randomUUID(), rows: [{ name: 'X', email: 'x@example.org' }] },
+  },
+  { method: 'GET', route: '/batches/:batchId', resource: 'batchId' },
+  { method: 'PATCH', route: '/batches/:batchId', resource: 'batchId', body: { sendEmail: false } },
+  { method: 'DELETE', route: '/batches/:batchId', resource: 'batchId' },
+  { method: 'POST', route: '/batches/:batchId/confirm', resource: 'batchId' },
+  { method: 'GET', route: '/batches/:batchId/rows', resource: 'batchId' },
+  { method: 'GET', route: '/batches/:batchId/results.csv', resource: 'batchId' },
+  { method: 'GET', route: '/exports/credentials.csv' },
+  { method: 'GET', route: '/exports/credentials.jsonl' },
+  { method: 'GET', route: '/exports/audit-events.csv' },
+  { method: 'GET', route: '/exports/audit-events.jsonl' },
 ];
 
 /** Sends a case as `client`: JSON, or an image upload. */
@@ -175,7 +228,8 @@ function url(orgId: string, route: string, ids: Partial<Tenant>) {
     .replace(':invitationId', ids.invitationId ?? '')
     .replace(':issuerId', ids.issuerId ?? '')
     .replace(':achievementId', ids.achievementId ?? '')
-    .replace(':credentialId', ids.credentialId ?? '');
+    .replace(':credentialId', ids.credentialId ?? '')
+    .replace(':batchId', ids.batchId ?? '');
 }
 
 /** Everything of org B's that an intruder might change. */
@@ -192,6 +246,11 @@ async function snapshotB() {
     credentials: await env.ownerDb.select().from(credential).where(eq(credential.orgId, b.orgId)),
     files: await env.ownerDb.select().from(file).where(eq(file.orgId, b.orgId)),
     statusLists: await env.ownerDb.select().from(statusList).where(eq(statusList.orgId, b.orgId)),
+    batches: await env.ownerDb.select().from(issuanceBatch).where(eq(issuanceBatch.orgId, b.orgId)),
+    batchRows: await env.ownerDb
+      .select()
+      .from(issuanceBatchRow)
+      .where(eq(issuanceBatchRow.orgId, b.orgId)),
   };
 }
 
@@ -227,7 +286,15 @@ describe('cross-tenant access', () => {
   });
 
   it("never lists another org's data", async () => {
-    const bIds = [b.orgId, b.issuerId, b.memberId, b.invitationId, b.achievementId, b.credentialId];
+    const bIds = [
+      b.orgId,
+      b.issuerId,
+      b.memberId,
+      b.invitationId,
+      b.achievementId,
+      b.credentialId,
+      b.batchId,
+    ];
     for (const test of CASES.filter((item) => item.method === 'GET' && !item.resource)) {
       const response = await a.owner.get(url(a.orgId, test.route, a));
       expect(response.statusCode, test.route).toBe(200);
@@ -275,6 +342,30 @@ describe('cross-tenant access', () => {
       achievementId: b.achievementId,
     });
     expect(preview.statusCode).toBe(404);
+    expect(await snapshotB()).toEqual(before);
+  });
+
+  it("can't revoke another org's credentials or batch its achievement through its own org", async () => {
+    const before = await snapshotB();
+    const revoked = await a.owner.post(`/api/v1/orgs/${a.orgId}/credentials/revoke`, {
+      credentialIds: [b.credentialId],
+      reason: 'Intrusion',
+    });
+    expect(revoked.statusCode).toBe(200);
+    expect(revoked.json()).toEqual({ revoked: [], alreadyRevoked: [], notFound: [b.credentialId] });
+    const batch = await a.owner.post(`/api/v1/orgs/${a.orgId}/batches`, {
+      achievementId: b.achievementId,
+      rows: [{ name: 'X', email: 'x@example.org' }],
+    });
+    expect(batch.statusCode).toBe(400);
+    const filtered = await a.owner.get(
+      `/api/v1/orgs/${a.orgId}/credentials?batchId=${b.batchId}&achievementId=${b.achievementId}`,
+    );
+    expect(filtered.json()).toMatchObject({ credentials: [] });
+    const exported = await a.owner.get(
+      `/api/v1/orgs/${a.orgId}/exports/credentials.csv?achievementId=${b.achievementId}`,
+    );
+    expect(exported.body).not.toContain(b.credentialId);
     expect(await snapshotB()).toEqual(before);
   });
 

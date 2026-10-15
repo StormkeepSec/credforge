@@ -252,7 +252,10 @@ The validator's "Uri to Resource" field also takes a URL, so credentials issued 
 credforge instance need no files: give it the credential's URL, then `{credential URL}/badge.png`
 and `{credential URL}/badge.svg`. For a local check, start the production stack with
 `PUBLIC_BASE_URL` set to a quick tunnel's address and a fresh database (the base URL is recorded on
-first start), as was done for M3 (design plan §17).
+first start), as was done for M3 (design plan §17). To check revocation, revoke a credential in
+the issuer app and wait until the worker has re-signed its status list (a few seconds: the
+instance's own `/verify` page then says "The issuer has revoked this credential" instead of "being
+updated"), then give the validator the credential's URL; it should report it as revoked.
 
 ## Using it from the server
 

@@ -71,9 +71,17 @@ export function problemErrorHandler(
   if (error instanceof ApiError) return sendProblem(reply, error);
   const status = (error as FastifyError).statusCode;
   if (status === 413) {
+    // Each upload route sets its own limit (images 2 MB, CSV files 5 MB).
+    const limit = request.routeOptions.bodyLimit;
+    const megabytes = limit ? Math.round(limit / (1024 * 1024)) : 2;
     return sendProblem(
       reply,
-      new ApiError(413, 'file_too_large', 'File too large', 'Files can be at most 2 MB.'),
+      new ApiError(
+        413,
+        'file_too_large',
+        'File too large',
+        `Files can be at most ${megabytes} MB.`,
+      ),
     );
   }
   if (status === 415) {

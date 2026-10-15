@@ -144,6 +144,11 @@ const envSchema = z
       .int('must be a whole number')
       .min(0, 'must be 0 (no limit) or more')
       .default(1000),
+    VERIFY_RATE_LIMIT: z.coerce
+      .number({ error: 'must be a whole number' })
+      .int('must be a whole number')
+      .min(0, 'must be 0 (no limit) or more')
+      .default(20),
 
     STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
     STORAGE_LOCAL_DIR: z.string().trim().optional(),
@@ -311,6 +316,8 @@ export interface Config {
   };
   /** Award emails per org in any 24 hours, unless a platform admin set the org's own; 0 = no limit. */
   defaultOrgDailySendLimit: number;
+  /** Verifications (the /verify page and POST /api/v1/verify) per client IP per minute; 0 = no limit. */
+  verifyRateLimit: number;
   storage: StorageConfig;
   oauth: {
     google?: OAuthClient;
@@ -400,6 +407,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
         env.EMAIL_FROM ?? `credforge <no-reply@${host === 'localhost' ? 'localhost.test' : host}>`,
     },
     defaultOrgDailySendLimit: env.DEFAULT_ORG_DAILY_SEND_LIMIT,
+    verifyRateLimit: env.VERIFY_RATE_LIMIT,
     storage:
       env.STORAGE_DRIVER === 's3'
         ? {

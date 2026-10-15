@@ -3,10 +3,13 @@ import { pino } from 'pino';
 import { loadConfigOrExit } from './config';
 import { createKeyEncryption } from './crypto/key-encryption';
 import { loadDevEnvFile } from './dev-env';
+import { createQueueOutbox } from './email/outbox';
 import { createDeliveryTracker } from './email/tracking';
 import { createEmailTransport } from './email/transport';
+import { createStorage } from './files/storage';
 import { enforceMasterKey, enforcePublicBaseUrl } from './instance';
 import { registerJobs } from './jobs';
+import { createJobQueue } from './jobs/enqueue';
 import { loggerOptions } from './logger';
 import { createQueueClient } from './queue';
 import { onShutdown } from './shutdown';
@@ -25,13 +28,23 @@ const boss = createQueueClient(config.databaseUrl, {
 });
 boss.on('error', (err) => log.error({ err }, 'job queue error'));
 
+const keys = createKeyEncryption(config.masterKey);
+
 try {
   await enforcePublicBaseUrl(db, config, log);
-  await enforceMasterKey(db, createKeyEncryption(config.masterKey), log);
+  await enforceMasterKey(db, keys, log);
   await boss.start();
   await registerJobs(boss, log, {
     emailTransport: createEmailTransport(config, log),
     deliveryTracker: createDeliveryTracker(db),
+    issuing: {
+      db,
+      config,
+      keys,
+      outbox: createQueueOutbox(boss),
+      storage: createStorage(config.storage),
+      jobs: createJobQueue(boss),
+    },
   });
 } catch (err) {
   log.fatal({ err }, 'worker failed to start');

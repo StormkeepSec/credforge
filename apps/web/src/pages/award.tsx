@@ -10,6 +10,7 @@ import { Link } from '@tanstack/react-router';
 import { CheckCircle2, ExternalLink, Send } from 'lucide-react';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { PageHeader } from '../components/app-shell';
+import { AwardTabs } from '../components/award-tabs';
 import { BadgePreview } from '../components/badge-preview';
 import { isWritable, OrgStatusBanner } from '../components/org-status';
 import { Button } from '../components/ui/button';
@@ -87,6 +88,7 @@ export function AwardPage({ orgId, achievementId }: { orgId: string; achievement
         description="Signed with your issuer’s key and emailed to the recipient."
       />
       <OrgStatusBanner org={org} />
+      <AwardTabs orgId={orgId} current="one" />
       {!canAward ? (
         <Alert variant="info">Your role can’t award badges in this organization.</Alert>
       ) : options.length === 0 ? (

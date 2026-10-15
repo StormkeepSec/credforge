@@ -65,21 +65,22 @@ const cache = new Map<string, { at: number; result: CredentialVerification }>();
 export async function verifyLocalCredential(
   db: Queryable,
   publicBaseUrl: string,
-  credentialId: string,
+  /** The credential id, plus anything that should invalidate it (its status list's version). */
+  cacheKey: string,
   document: unknown,
 ): Promise<CredentialVerification> {
-  const hit = cache.get(credentialId);
+  const hit = cache.get(cacheKey);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.result;
   const result = await verifyCredential(document, createLocalResolvers(db, publicBaseUrl));
   if (cache.size >= CACHE_ENTRIES) {
     const oldest = cache.keys().next().value;
     if (oldest !== undefined) cache.delete(oldest);
   }
-  cache.set(credentialId, { at: Date.now(), result });
+  cache.set(cacheKey, { at: Date.now(), result });
   return result;
 }
 
-/** Drops a cached result (after a revocation or a status change). */
+/** Drops a credential's cached results (after a revocation or a status change). */
 export function forgetVerification(credentialId: string): void {
-  cache.delete(credentialId);
+  for (const key of cache.keys()) if (key.split(':')[0] === credentialId) cache.delete(key);
 }

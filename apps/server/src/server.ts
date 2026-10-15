@@ -8,6 +8,7 @@ import { loadDevEnvFile } from './dev-env';
 import { createQueueOutbox } from './email/outbox';
 import { createStorage, describeStorage } from './files/storage';
 import { enforceMasterKey, enforcePublicBaseUrl } from './instance';
+import { createJobQueue } from './jobs/enqueue';
 import { loggerOptions } from './logger';
 import { createQueueClient } from './queue';
 import { onShutdown } from './shutdown';
@@ -32,7 +33,7 @@ const app = await buildApp({
   checkDatabase: async () => {
     await pool.query('select 1');
   },
-  services: { config, db, auth, outbox, keys, storage },
+  services: { config, db, auth, outbox, keys, storage, jobs: createJobQueue(boss) },
 });
 
 try {
