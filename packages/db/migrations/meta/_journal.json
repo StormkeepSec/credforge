@@ -8,6 +8,20 @@
       "when": 1792006763969,
       "tag": "0000_instance_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792022454122,
+      "tag": "0001_accounts_orgs_issuers",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792022459305,
+      "tag": "0002_audit_append_only",
+      "breakpoints": true
     }
   ]
 }

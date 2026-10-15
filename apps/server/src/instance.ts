@@ -1,8 +1,66 @@
 import { type Database, eq, instanceSettings } from '@credforge/db';
 import type { Logger } from 'pino';
 import type { Config } from './config';
+import { KeyDecryptionError, type KeyEncryption } from './crypto/key-encryption';
 
 const PUBLIC_BASE_URL_KEY = 'public_base_url';
+const MASTER_KEY_CHECK_KEY = 'master_key_check';
+const MASTER_KEY_CHECK_VALUE = 'credforge master key check';
+const MASTER_KEY_CHECK_AAD = 'credforge:instance:master-key-check';
+
+export class MasterKeyMismatchError extends Error {
+  constructor() {
+    super(
+      'CREDFORGE_MASTER_KEY is not the key this instance was set up with, so it cannot decrypt ' +
+        'issuer signing keys. Restore the original key (from your backup of it). Nothing has been changed.',
+    );
+    this.name = 'MasterKeyMismatchError';
+  }
+}
+
+/**
+ * Records a value encrypted under the master key on first start, and refuses to run if a later
+ * start can't decrypt it. A wrong or lost key is then caught at startup, not when an issuer next
+ * signs a credential or a status list (design plan §13.4).
+ */
+export async function enforceMasterKey(
+  db: Database,
+  keys: KeyEncryption,
+  log: Pick<Logger, 'info'>,
+): Promise<void> {
+  const inserted = await db
+    .insert(instanceSettings)
+    .values({
+      key: MASTER_KEY_CHECK_KEY,
+      value: JSON.stringify({
+        version: keys.version,
+        value: keys.encrypt(MASTER_KEY_CHECK_VALUE, MASTER_KEY_CHECK_AAD),
+      }),
+    })
+    .onConflictDoNothing()
+    .returning({ key: instanceSettings.key });
+  if (inserted.length > 0) {
+    log.info('recorded master key check for this instance');
+    return;
+  }
+  const [row] = await db
+    .select({ value: instanceSettings.value })
+    .from(instanceSettings)
+    .where(eq(instanceSettings.key, MASTER_KEY_CHECK_KEY));
+  try {
+    const stored = JSON.parse(row?.value ?? '{}') as { version: number; value: string };
+    if (
+      keys.decrypt(stored.value, MASTER_KEY_CHECK_AAD, stored.version) !== MASTER_KEY_CHECK_VALUE
+    ) {
+      throw new MasterKeyMismatchError();
+    }
+  } catch (error) {
+    if (error instanceof KeyDecryptionError || error instanceof SyntaxError) {
+      throw new MasterKeyMismatchError();
+    }
+    throw error;
+  }
+}
 
 export type BaseUrlDecision =
   | { action: 'ok' }

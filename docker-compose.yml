@@ -1,6 +1,7 @@
 # credforge production stack.
 #   cp .env.example .env   # then fill it in
 #   docker compose up -d --build
+#   docker compose exec app node dist/cli.js create-platform-admin --email you@example.org
 # The app listens on 127.0.0.1:3000 only; put your nginx (TLS) in front of it.
 
 name: credforge
@@ -9,8 +10,10 @@ x-app: &app
   image: credforge:${CREDFORGE_VERSION:-latest} # becomes a registry path once the repo is hosted
   build: .
   env_file: .env
-  environment:
-    DATABASE_URL: postgres://credforge:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/credforge
+  environment: &app-env
+    # The app and worker connect as a restricted role (created by migrate): no DDL, and the
+    # audit log is read and append only.
+    DATABASE_URL: postgres://credforge_app:${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}@db:5432/credforge
   restart: unless-stopped
 
 services:
@@ -18,6 +21,10 @@ services:
     <<: *app
     command: ["node", "--enable-source-maps", "dist/migrate.js"]
     restart: "no"
+    environment:
+      <<: *app-env
+      # Migrations run as the database owner.
+      MIGRATION_DATABASE_URL: postgres://credforge:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/credforge
     depends_on:
       db:
         condition: service_healthy

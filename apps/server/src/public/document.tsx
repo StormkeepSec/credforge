@@ -7,11 +7,20 @@ export interface DocumentProps {
   /** Absolute URL of this page (under PUBLIC_BASE_URL). */
   url: string;
   stylesheet: string;
+  /** URL of the same resource as JSON-LD (content negotiation), if there is one. */
+  alternateJson?: string;
   children: ReactNode;
 }
 
 /** HTML shell for every server-rendered public page. */
-export function Document({ title, description, url, stylesheet, children }: DocumentProps) {
+export function Document({
+  title,
+  description,
+  url,
+  stylesheet,
+  alternateJson,
+  children,
+}: DocumentProps) {
   return (
     <html lang="en">
       <head>
@@ -20,6 +29,7 @@ export function Document({ title, description, url, stylesheet, children }: Docu
         <title>{title}</title>
         <meta name="description" content={description} />
         <link rel="canonical" href={url} />
+        {alternateJson && <link rel="alternate" type="application/ld+json" href={alternateJson} />}
         <meta property="og:site_name" content="credforge" />
         <meta property="og:type" content="website" />
         <meta property="og:title" content={title} />

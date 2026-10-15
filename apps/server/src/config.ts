@@ -1,11 +1,26 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { SIGNUP_MODES, type SignupMode } from '@credforge/contracts';
 import { z } from 'zod';
 
-/** Defaults applied only when NODE_ENV=development, so `pnpm dev` works with no setup. */
+/**
+ * Defaults applied only when NODE_ENV=development, so `pnpm dev` works with no setup.
+ * The app connects as a restricted role that `migrate` creates (see packages/db/src/app-role.ts);
+ * migrations run as the database owner from compose.dev.yml.
+ */
 const DEVELOPMENT_DEFAULTS: Record<string, string> = {
   PUBLIC_BASE_URL: 'http://localhost:5173',
-  DATABASE_URL: 'postgres://credforge:credforge@localhost:5432/credforge',
+  DATABASE_URL: 'postgres://credforge_app:credforge_app@localhost:5432/credforge',
+  MIGRATION_DATABASE_URL: 'postgres://credforge:credforge@localhost:5432/credforge',
+  EMAIL_TRANSPORT: 'smtp',
+  SMTP_URL: 'smtp://localhost:1025', // Mailpit (compose.dev.yml)
+};
+
+/** Used outside production when the variable isn't set. Never valid in production. */
+const NON_PRODUCTION_SECRETS = {
+  AUTH_SECRET: 'credforge-development-auth-secret-do-not-use-in-production',
+  // base64 of the 32 ASCII bytes "credforge-dev-master-key-32bytes"
+  CREDFORGE_MASTER_KEY: 'Y3JlZGZvcmdlLWRldi1tYXN0ZXIta2V5LTMyYnl0ZXM=',
 };
 
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -50,15 +65,39 @@ const trustProxy = z
     return value;
   });
 
+const postgresUrl = z
+  .string({ error: 'is required' })
+  .regex(/^postgres(ql)?:\/\//, 'must be a postgres:// connection string');
+
+/** 32 bytes as base64, base64url or hex, e.g. the output of `openssl rand -base64 32`. */
+const masterKey = z
+  .string()
+  .trim()
+  .transform((value, ctx) => {
+    const bytes = /^[0-9a-f]{64}$/i.test(value)
+      ? Buffer.from(value, 'hex')
+      : /^[A-Za-z0-9+/_-]{43}={0,1}$/.test(value)
+        ? Buffer.from(value.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+        : undefined;
+    if (bytes?.length !== 32) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'must be 32 random bytes in base64 or hex, e.g. the output of `openssl rand -base64 32`',
+      });
+      return z.NEVER;
+    }
+    return bytes;
+  });
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     HOST: z.string().default('0.0.0.0'),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
     PUBLIC_BASE_URL: publicBaseUrl,
-    DATABASE_URL: z
-      .string({ error: 'is required' })
-      .regex(/^postgres(ql)?:\/\//, 'must be a postgres:// connection string'),
+    DATABASE_URL: postgresUrl,
+    MIGRATION_DATABASE_URL: postgresUrl.optional(),
     LOG_LEVEL: z
       .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
       .default('info'),
@@ -67,17 +106,76 @@ const envSchema = z
     LANDING_PAGE: z.stringbool().default(true),
     WEB_DIST_DIR: z.string().optional(),
     MIGRATIONS_DIR: z.string().optional(),
+
+    AUTH_SECRET: z.string().min(32, 'must be at least 32 characters').optional(),
+    CREDFORGE_MASTER_KEY: masterKey.optional(),
+
+    EMAIL_TRANSPORT: z.enum(['smtp', 'log']).optional(),
+    SMTP_URL: z
+      .string()
+      .regex(/^smtps?:\/\//, 'must be an smtp:// or smtps:// URL')
+      .optional(),
+    EMAIL_FROM: z.string().trim().optional(),
+
+    GOOGLE_CLIENT_ID: z.string().trim().optional(),
+    GOOGLE_CLIENT_SECRET: z.string().trim().optional(),
+    MICROSOFT_CLIENT_ID: z.string().trim().optional(),
+    MICROSOFT_CLIENT_SECRET: z.string().trim().optional(),
+    MICROSOFT_TENANT_ID: z.string().trim().default('common'),
+
+    REQUIRE_MFA_FOR_ADMINS: z.stringbool().default(true),
+    SIGNUP_MODE: z.enum(SIGNUP_MODES).default('approval'),
   })
   .superRefine((env, ctx) => {
+    const production = env.NODE_ENV === 'production';
     const { protocol, hostname } = new URL(env.PUBLIC_BASE_URL);
-    if (env.NODE_ENV === 'production' && protocol !== 'https:' && !LOCAL_HOSTNAMES.has(hostname)) {
+    if (production && protocol !== 'https:' && !LOCAL_HOSTNAMES.has(hostname)) {
       ctx.addIssue({
         code: 'custom',
         path: ['PUBLIC_BASE_URL'],
         message: 'must use https:// in production (http:// is only allowed for localhost)',
       });
     }
+    if (production) {
+      for (const name of ['AUTH_SECRET', 'CREDFORGE_MASTER_KEY', 'EMAIL_TRANSPORT'] as const) {
+        if (env[name] === undefined) {
+          ctx.addIssue({ code: 'custom', path: [name], message: 'is required in production' });
+        }
+      }
+    }
+    if (env.EMAIL_TRANSPORT === 'smtp') {
+      if (!env.SMTP_URL) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['SMTP_URL'],
+          message: 'is required for EMAIL_TRANSPORT=smtp',
+        });
+      }
+      if (production && !env.EMAIL_FROM) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['EMAIL_FROM'],
+          message: 'is required in production, e.g. credforge <awards@credforge.app>',
+        });
+      }
+    }
+    for (const provider of ['GOOGLE', 'MICROSOFT'] as const) {
+      const id = env[`${provider}_CLIENT_ID`];
+      const secret = env[`${provider}_CLIENT_SECRET`];
+      if (Boolean(id) !== Boolean(secret)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [id ? `${provider}_CLIENT_SECRET` : `${provider}_CLIENT_ID`],
+          message: `is required when ${id ? `${provider}_CLIENT_ID` : `${provider}_CLIENT_SECRET`} is set`,
+        });
+      }
+    }
   });
+
+export interface OAuthClient {
+  clientId: string;
+  clientSecret: string;
+}
 
 export interface Config {
   env: 'development' | 'test' | 'production';
@@ -85,7 +183,10 @@ export interface Config {
   port: number;
   /** Origin every public URL is built from, e.g. https://credforge.app. Permanent once set. */
   publicBaseUrl: string;
+  /** The app's restricted role (app and worker). */
   databaseUrl: string;
+  /** The database owner, used by `migrate` and the CLI. Defaults to `databaseUrl`. */
+  migrationDatabaseUrl: string;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   trustProxy: boolean | string;
   allowPublicBaseUrlChange: boolean;
@@ -94,6 +195,23 @@ export interface Config {
   webDistDir: string;
   /** SQL migrations (packages/db/migrations). */
   migrationsDir: string;
+  /** Signs sessions and encrypts TOTP secrets. Must never change once users enable 2FA. */
+  authSecret: string;
+  /** 32 bytes; encrypts issuer private keys (design plan §6.2). */
+  masterKey: Buffer;
+  email: {
+    transport: 'smtp' | 'log';
+    smtpUrl?: string;
+    /** e.g. `credforge <awards@credforge.app>`. */
+    from: string;
+  };
+  oauth: {
+    google?: OAuthClient;
+    microsoft?: OAuthClient & { tenantId: string };
+  };
+  /** Owners, admins and platform admins need a credforge second factor after any sign-in. */
+  requireMfaForAdmins: boolean;
+  signupMode: SignupMode;
 }
 
 export class ConfigError extends Error {
@@ -132,8 +250,12 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   const defined = Object.fromEntries(
     Object.entries(resolved).filter(([, value]) => value !== undefined && value !== ''),
   );
-  const isDevelopment = (defined.NODE_ENV ?? 'development') === 'development';
-  const input = isDevelopment ? { ...DEVELOPMENT_DEFAULTS, ...defined } : defined;
+  const nodeEnv = defined.NODE_ENV ?? 'development';
+  const input = {
+    ...(nodeEnv !== 'production' && NON_PRODUCTION_SECRETS),
+    ...(nodeEnv === 'development' && DEVELOPMENT_DEFAULTS),
+    ...defined,
+  };
 
   const result = envSchema.safeParse(input);
   if (!result.success) {
@@ -145,18 +267,45 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   const env = result.data;
   // Relative to this module: apps/server/src in development, apps/server/dist when built.
   const here = import.meta.dirname;
+  const host = new URL(env.PUBLIC_BASE_URL).hostname;
   return {
     env: env.NODE_ENV,
     host: env.HOST,
     port: env.PORT,
     publicBaseUrl: env.PUBLIC_BASE_URL,
     databaseUrl: env.DATABASE_URL,
+    migrationDatabaseUrl: env.MIGRATION_DATABASE_URL ?? env.DATABASE_URL,
     logLevel: env.LOG_LEVEL,
     trustProxy: env.TRUST_PROXY,
     allowPublicBaseUrlChange: env.ALLOW_PUBLIC_BASE_URL_CHANGE,
     landingPage: env.LANDING_PAGE,
     webDistDir: env.WEB_DIST_DIR ?? resolve(here, '../../web/dist'),
     migrationsDir: env.MIGRATIONS_DIR ?? resolve(here, '../../../packages/db/migrations'),
+    // Both are set: required in production, defaulted otherwise (checked above).
+    authSecret: env.AUTH_SECRET as string,
+    masterKey: env.CREDFORGE_MASTER_KEY as Buffer,
+    email: {
+      transport: env.EMAIL_TRANSPORT ?? 'log',
+      smtpUrl: env.SMTP_URL,
+      from:
+        env.EMAIL_FROM ?? `credforge <no-reply@${host === 'localhost' ? 'localhost.test' : host}>`,
+    },
+    oauth: {
+      google:
+        env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET
+          ? { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }
+          : undefined,
+      microsoft:
+        env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET
+          ? {
+              clientId: env.MICROSOFT_CLIENT_ID,
+              clientSecret: env.MICROSOFT_CLIENT_SECRET,
+              tenantId: env.MICROSOFT_TENANT_ID,
+            }
+          : undefined,
+    },
+    requireMfaForAdmins: env.REQUIRE_MFA_FOR_ADMINS,
+    signupMode: env.SIGNUP_MODE,
   };
 }
 

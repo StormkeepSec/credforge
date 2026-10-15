@@ -23,7 +23,8 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '^/$': serverOrigin, // landing page
-      ...Object.fromEntries(serverPaths.map((path) => [path, serverOrigin])),
+      // Whole path segments only: `/verify` must not catch the app's own `/verify-email`.
+      ...Object.fromEntries(serverPaths.map((path) => [`^${path}(?:[/?]|$)`, serverOrigin])),
     },
   },
   build: {

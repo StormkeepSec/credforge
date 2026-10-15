@@ -1,7 +1,7 @@
 # credforge: Design Plan
 
-**Status:** v0.3. M0 and M1 are done. M1's sample credentials passed the 1EdTech validator on 2026-10-14 (§17). M1 findings that changed the plan are folded into §4.2, §5.1, §6.1, §6.2, §9, §15 and §17.
-**Date:** 2026-10-14
+**Status:** v0.4. M0, M1 and M2 are done. M1's sample credentials passed the 1EdTech validator on 2026-10-14 (§17). Findings and decisions from M1 and M2 that changed the plan are folded into §2, §4, §5.1, §6, §7, §9, §10, §12, §13, §15, §16, §17 and the decision log (§18).
+**Date:** 2026-10-15
 **Inputs:** `openbadges_platform_project_requirements.md` (first attempt), `branding/` (brand guide, copy kit, logo assets), and the 1EdTech Open Badges 3.0 spec (Final Release, document v1.4.5, June 29, 2026).
 
 ---
@@ -46,7 +46,7 @@ So the code never hard-codes `credforge.app`. Every URL is built from `PUBLIC_BA
 | Server | **Fastify 5** with **Zod** schemas, generating **OpenAPI 3.1** | API-first. Every request and response is schema-validated, and the API docs are generated from the same schemas. |
 | Issuer UI | **React 19 SPA** (Vite) with TanStack Router/Query, **Tailwind CSS v4** and **shadcn/ui** (Radix primitives) | The admin UI is just another client of the public REST API (dogfooding), so the API is guaranteed to be complete. Radix gives accessible components. |
 | Public pages | **Server-rendered HTML** (React SSR) from the same Fastify app | Link previews on LinkedIn/Slack need server-side Open Graph tags. Verifiers without JavaScript still work, and pages are fast and printable. |
-| Auth | **Better Auth**: email+password, **Continue with Google** and **Microsoft**, email verification, TOTP MFA, organizations with roles and invitations, magic links. Per-org enterprise SSO (OIDC/SAML) later. | A maintained, framework-agnostic library that covers most of the auth, federated sign-in and multi-tenant plumbing. |
+| Auth | **Better Auth** for identity: email+password, **Continue with Google** and **Microsoft**, email verification, TOTP MFA. Organizations, members, roles and invitations are credforge's own `/api/v1` resources (decision 11). Per-org enterprise SSO (OIDC/SAML) later. | A maintained, framework-agnostic library that covers sign-in, federated identity and second factors. Keeping orgs in credforge's own API puts every change and its audit event in one transaction and lets API keys (M5) use the same endpoints. |
 | Database | **PostgreSQL 18** with **Drizzle ORM** and SQL migrations | Relational core. JSONB holds signed credentials. Migrations are typed and reviewable. |
 | Background jobs | **pg-boss** (a queue stored in Postgres). **No Redis.** | One less stateful service to run and back up on a droplet. Jobs are enqueued in the same transaction as the data. |
 | File storage | **DigitalOcean Spaces** (S3 API) for credforge.app; a local volume for self-hosters and offline dev | You already run Spaces. It is durable and off the droplet, and supports per-bucket access keys. |
@@ -117,8 +117,8 @@ It is one deployable with clearly separated modules:
 
 | Module | Responsibility |
 |---|---|
-| `auth` | Better Auth: sessions, MFA, email verification, magic links |
-| `orgs` | Organizations, members, roles, invitations |
+| `auth` | Better Auth: sessions, sign-in methods, email verification, TOTP; credforge's second-factor gate in front of it (§6.4) |
+| `orgs` | Organizations, members, roles, invitations, the org-scoped access check (§7) |
 | `issuers` | Issuer profiles, signing keys, domain verification, public profile documents |
 | `achievements` | Achievement definitions, images, revisions |
 | `issuance` | Single awards, CSV batches, drafts, idempotency |
@@ -324,10 +324,22 @@ Details settled in M1 (the full signed example is `packages/ob3/test/fixtures/go
   - `revoked`: removed from `assertionMethod`, so credentials it signed fail verification. The UI then offers a bulk reissue.
 - Org owners can rotate keys from the UI. A CLI command does the same.
 
+**Built in M2:**
+
+- An issuer's first key is generated when the issuer is created (`generateEd25519KeyPair` from `packages/ob3`). The creation fails unless the stored key decrypts back into a working signer.
+- Stored as `{iv}.{ciphertext}.{tag}` (base64url): AES-256-GCM, a random 96-bit IV per value, and additional authenticated data `credforge:signing-key:{keyId}`. An encrypted key copied into another row doesn't decrypt.
+- `kek_version` is `1` for now. The rotation CLI and its environment variables arrive with key rotation (M5).
+- `CREDFORGE_MASTER_KEY` (or `CREDFORGE_MASTER_KEY_FILE`) takes 32 bytes as base64, base64url or hex. `migrate`, `app` and `worker` record a value encrypted under it on first start (`instance_settings.master_key_check`), and refuse to start if a later key can't decrypt it. A wrong or lost key is caught at startup, not at the next signature.
+- The API returns only the public key, its status and its creation date.
+
 ### 6.3 Trust and anti-impersonation (hosted instance)
 
 - **Issuer domain verification.** The issuer proves it controls its website domain with a DNS TXT record (`_credforge.example.org TXT "credforge-verify=…"`) or a file at `/.well-known/credforge-verify.txt`. Public pages then show "Website verified: example.org". Unverified issuers show their website as *self-reported*. The wording stays precise, per the brand guardrails.
 - **Approval gate** (`SIGNUP_MODE=approval`, the credforge.app setting). A new org starts as `pending`. It can complete its issuer profile, create achievements and **test-award to its own members' verified email addresses**, so it still gets to its first badge quickly. Awarding to anyone else waits until a platform admin approves the org. The admin gets a queue of pending orgs showing name, website, domain-verification status and requester; the org is emailed when it is approved or declined. Self-hosters usually choose `open` or `invite`.
+  - **Built in M2:** the statuses and transitions (approve: pending/declined → active; decline: pending → declined; suspend: pending/active → suspended; reinstate: suspended → active, or pending if it was never approved), the queue on the **Platform** screen, emails to the owners on approve, decline and suspend, and an email to every platform admin when an org is created. Suspended and declined orgs are read-only (`org_inactive`). The test-award rule itself is enforced with awarding in M3.
+  - One person can have at most 3 orgs waiting for approval. An org a platform admin creates is active at once.
+  - `open`: new orgs are active at once. `invite`: an account can only be created for an address with a pending invitation, and only platform admins create orgs. A refused sign-up gets the same answer as a normal one (Better Auth's protection against account enumeration), so the sign-up screen says up front that the site is invite-only.
+  - The first platform admin comes from the CLI: `node dist/cli.js create-platform-admin --email …` promotes an existing account, or creates one (email marked verified) and prints a one-time link to set its password.
 - **Daily send cap.** A per-org daily cap (`DEFAULT_ORG_DAILY_SEND_LIMIT`) is a second guard even after approval, in case an account is compromised. Platform admins can raise it per org.
 - **Suspension.** A platform admin can suspend an org, which stops all issuing and emailing. Existing credentials stay verifiable unless they are revoked for abuse.
 - **Report abuse.** Every public credential page has a "Report a problem" link.
@@ -363,6 +375,18 @@ A provider is switched on only when its client ID and secret are configured, so 
 - credforge can't tell whether someone's Google account uses 2-step verification. So on credforge.app, **owners and admins must pass a credforge second factor (TOTP) after *any* sign-in method**. This is a small custom hook in the `auth` module, with tests. Issuers and viewers are encouraged to enable it, but it isn't required.
 - Later, enterprise SSO connections that report MFA in the token (`amr` claim) can be trusted instead.
 
+**How M2 built it:**
+
+- **Per-session second factor.** Each session records when it passed a TOTP or backup code (`session.mfa_verified_at`). It is set when a code is verified after a password, on an existing session (the step-up after Google or Microsoft), and when two-step verification is first turned on.
+- **Who must pass it** (`REQUIRE_MFA_FOR_ADMINS=true`): owners and admins of any org, and **platform admins** too (the most privileged accounts). Without it turned on, the session's state is `setup`; with it on but not yet passed in this session, `challenge`. **Anyone who turned it on voluntarily is challenged after Google or Microsoft sign-in too**, since that is what they would expect.
+- **The gate.** In `setup` or `challenge`, `/api/v1` answers `403 mfa_setup_required` / `mfa_required` (only `GET /api/v1/me` works, without memberships or invitations), and only the Better Auth endpoints that lead through the second factor are reachable. Linking or unlinking sign-in methods, changing the password, reading the TOTP secret and turning two-step verification off all wait until the session has passed it. Covered by tests that run the real OAuth callback.
+- **Google- or Microsoft-only accounts** can turn on two-step verification without a password (Better Auth's `allowPasswordless`). Accounts with a password must enter it.
+- **"Trust this device"** is not offered: every session passes the second factor.
+- **Microsoft:** basic OpenID scopes only (`openid profile email`), no Graph access, no profile photo download, no refresh token. Both providers use `requireEmailVerification`, so an unverified provider email gets credforge's confirmation email and no session until it is confirmed.
+- **Sign-in methods** (Settings): connect Google or Microsoft (the provider account must use the same email), disconnect one as long as another remains, and "Set a password" for a provider-only account (it sends the password-reset link, which adds a password).
+- **Audit:** account creation, email confirmation, sign-ins (with method), sign-in methods added and removed, password changes and resets, two-step verification on and off, and new backup codes are all recorded.
+- **Development redirect URIs** use the Vite origin: `http://localhost:5173/api/auth/callback/{google|microsoft}` (not port 3000).
+
 **Setup for credforge.app** (a checklist goes in the deployment guide):
 
 - **Google Cloud:**
@@ -374,7 +398,7 @@ A provider is switched on only when its client ID and secret are configured, so 
   - Redirect URI: `https://credforge.app/api/auth/callback/microsoft`.
   - Add the optional claim `xms_edov`.
   - Publisher verification (needs a Microsoft Partner Network ID) removes the "unverified" label. It's optional.
-- **Development:** separate dev OAuth clients with `http://localhost:3000/api/auth/callback/…` redirect URIs.
+- **Development:** separate dev OAuth clients with `http://localhost:5173/api/auth/callback/…` redirect URIs (the Vite dev server forwards `/api` to the app).
 
 ---
 
@@ -398,11 +422,11 @@ erDiagram
 
 | Entity | Key fields | Notes |
 |---|---|---|
-| `user`, `session`, `account`, `verification`, `two_factor` | (managed by Better Auth) + `is_platform_admin` | |
-| `organization` | name, slug, `status` (pending / active / suspended / declined), `approved_by`, `approved_at`, `daily_send_limit` | Tenant boundary |
-| `member` / `invitation` | org, user/email, `role` | owner · admin · issuer · viewer |
-| `issuer` | **uuid (public)**, org, name, description, url, email, logo, accent color, `domain`, `domain_verified_at` | The OB `Profile` |
-| `signing_key` | issuer, algorithm, public key (multibase/JWK), **encrypted private key**, `kek_version`, `status`, timestamps | |
+| `user`, `session`, `account`, `verification`, `two_factor` | (managed by Better Auth) + `user.is_platform_admin`, `session.mfa_verified_at` | UUID ids. Provider tokens in `account` are always null (§6.4) |
+| `organization` | name, `status` (pending / active / suspended / declined), `status_reason`, `status_changed_at`, `created_by`, `approved_by`, `approved_at`; `daily_send_limit` arrives with sending (M3) | Tenant boundary. No `slug`: org URLs use the id |
+| `member` / `invitation` | org, user/email, `role`; invitations also hold the SHA-256 of the link token, `status` (pending / accepted / revoked), `expires_at` (7 days), `invited_by`, `accepted_by` | owner · admin · issuer · viewer. One open invitation per address per org; inviting again sends a fresh link |
+| `issuer` | **uuid (public)**, org, name, description, url, email; logo, accent color, `domain`, `domain_verified_at` arrive with images (M3) and domain verification (M5) | The OB `Profile` |
+| `signing_key` | org, issuer, algorithm (Ed25519), `public_key_multibase`, **encrypted private key**, `kek_version`, `status` (active / retired / revoked), timestamps | At most one active key per issuer |
 | `achievement` | **uuid (public)**, issuer, name, description, criteria (narrative / url), `achievement_type`, image, tags, alignments (jsonb), default validity period, `revision`, `status` (draft / active / archived) | |
 | `credential` | **uuid (public)**, org, issuer, achievement + revision, batch, `recipient_email` (normalized), `recipient_name`, `email_salt`, `status` (draft / issued / revoked), `valid_from`, `valid_until`, **`document` (signed VC, jsonb)**, `signing_key_id`, status list + index, evidence, custom fields, `visibility`, `claim_token_hash`, `accepted_at`, revocation reason/time, `replaced_by_id`, issued_by (user or API key) | "Expired" is computed from `valid_until`, never stored |
 | `issuance_batch` | org, achievement, source (csv / api), file, column mapping, `status`, counts, per-row results | |
@@ -410,10 +434,14 @@ erDiagram
 | `email_message` | org, credential, kind, recipient, provider message ID, `status` (queued / sent / delivered / bounced / failed), attempts, error | Drives the delivery status the issuer sees |
 | `email_template` | org/issuer, kind, subject, body (limited Markdown) | Defaults ship with the app |
 | `api_key` | org, name, `prefix`, **hash**, scopes, last used, expiry, revoked | The key is shown once |
-| `audit_event` | org, actor (user / api_key / system / recipient), action, target, IP, user agent, data, time | **Append-only:** the app's database role cannot UPDATE or DELETE |
+| `audit_event` | org (null for account-level events), actor (user / api_key / system / recipient) with its email at the time, action, target, IP, user agent, data, time | **Append-only:** the app's database role is granted only SELECT and INSERT, and triggers reject UPDATE, DELETE and TRUNCATE for every role. No foreign keys, so nothing cascades into it |
 | `file` | org, kind (issuer logo / badge image / CSV import / export), storage driver + bucket + key, MIME type, size, **sha256**, dimensions, derived variants, `visibility` (public / private), `retain` (set once an issued credential references it) | Public images are content-addressed (§5.4) |
 
 **Tenant isolation:** every tenant-owned row has `org_id`. The data-access layer requires an org scope on every query. An integration test tries cross-tenant access against **every** endpoint. Postgres row-level security is a defense-in-depth hardening item.
+
+As built in M2: every org-scoped endpoint lives under `/api/v1/orgs/{orgId}/…`. Before any handler runs, the caller's membership of that org is loaded; a non-member gets the same 404 as for an org that doesn't exist, and every query filters on the org id as well as the resource id. The cross-tenant suite (`apps/server/test/integration/cross-tenant.test.ts`) takes the route list from the app itself and fails if an org-scoped route has no case. It tries each route with another org's id, and with the caller's own org id plus another org's resource ids, then checks the other org's rows are unchanged.
+
+**Database roles:** `migrate` runs as the database owner (`MIGRATION_DATABASE_URL`) and creates or updates the app's role from `DATABASE_URL`: DML on the app's tables (SELECT and INSERT only on `audit_event`) and on the job queue's tables, no DDL, owns nothing. The app and worker run their job queue clients with `migrate: false`. If both URLs use the same user, migrate logs a warning and the triggers still keep the audit log append-only.
 
 ---
 
@@ -421,7 +449,9 @@ erDiagram
 
 ### 8.1 Onboarding: "time to first badge" under 5 minutes
 
-Sign up → verify email → name your organization → issuer profile (name, website, logo, contact email) → *(optional)* verify your domain → create your first achievement → award it to yourself as a test → see exactly what your recipients will see.
+Sign up → verify email → name your organization → turn on two-step verification (required for owners when `REQUIRE_MFA_FOR_ADMINS=true`) → issuer profile (name, website, logo, contact email) → *(optional)* verify your domain → create your first achievement → award it to yourself as a test → see exactly what your recipients will see.
+
+In M2 the org overview shows this as a checklist; the logo, domain and achievement steps are marked as coming later.
 
 On credforge.app the org is *pending* during all of this. A banner explains that awarding to other people opens once the org is approved; verifying the domain makes approval faster. Approval emails the org owner, and a platform admin can approve or decline from the Platform screen.
 
@@ -474,9 +504,9 @@ Upload a CSV (MVP limit: 10,000 rows / 5 MB, with a downloadable template) → m
 | Path | Purpose | Notes |
 |---|---|---|
 | `/` | Landing page (brand site) | `LANDING_PAGE=false` redirects to `/login`, for self-hosters |
-| `/login`, `/signup`, `/reset-password`, `/invite/:token` | Auth screens | |
+| `/login`, `/signup`, `/forgot-password`, `/reset-password`, `/verify-email`, `/two-factor`, `/invite/:token` | Auth screens (issuer app) | `/verify-email` is where confirmation links land; `/two-factor` is the code step after a password or the step-up after Google/Microsoft |
 | `/app/*` | Issuer admin SPA | |
-| `/issuers/:id` | Issuer page (HTML) or Profile (JSON) | **Permanent**, embedded in credentials |
+| `/issuers/:id` | Issuer page (HTML) or Profile (JSON) | **Permanent**, embedded in credentials. Browsers get HTML; `application/ld+json`, `application/json`, `*/*` or no `Accept` get the profile JSON (`Vary: Accept`, CORS `*`, 5-minute cache). Pending, suspended and declined orgs show a notice on the HTML page; the JSON is always served so their credentials still verify |
 | `/issuers/:id/images/:hash.png` | Issuer logo | **Permanent**, immutable, served from Spaces through the app |
 | `/achievements/:id` | Achievement page (HTML) or JSON | **Permanent** |
 | `/achievements/:id/images/:hash.{png,svg}` (+ `-512.png`, `-128.png`, `-og.png`) | Badge image and its derived sizes | **Permanent**, immutable, served from Spaces through the app |
@@ -508,6 +538,20 @@ Upload a CSV (MVP limit: 10,000 rows / 5 MB, with a downloadable template) → m
 | Export | `GET /exports/credentials.csv` · `GET /exports/credentials.jsonl` |
 
 *Phase 3:* the 1EdTech **Open Badges API** (the OB 3.0 REST/OAuth 2.0 API for hosts and wallets).
+
+**Built in M2** (all under `/api/v1`; tenant resources are nested under the org, so the table's `/issuers/{id}` is `/orgs/{orgId}/issuers/{id}`; an API key in M5 will carry its org and use the same paths):
+
+| Area | Endpoints |
+|---|---|
+| Instance and session | `GET /instance` (sign-up mode, enabled providers) · `GET /me` (user, second-factor state, sign-in methods, memberships, invitations to the verified address) |
+| Organizations | `POST /orgs` · `GET/PATCH /orgs/{orgId}` |
+| Members | `GET /orgs/{orgId}/members` · `PATCH/DELETE /orgs/{orgId}/members/{memberId}` (deleting yourself is leaving) |
+| Invitations | `GET/POST /orgs/{orgId}/invitations` · `POST …/{id}/resend` · `DELETE …/{id}` · `GET /invitations/{token}` (preview, no sign-in) · `POST /invitations/{token}/accept` · `POST /me/invitations/{id}/accept` |
+| Issuers | `GET/POST /orgs/{orgId}/issuers` · `GET/PATCH /orgs/{orgId}/issuers/{issuerId}` |
+| Audit | `GET /orgs/{orgId}/audit-events?before=&limit=` |
+| Platform | `GET /platform/orgs?status=` · `POST /platform/orgs/{orgId}/approve` · `/decline` · `/suspend` · `/reinstate` |
+
+Errors are `application/problem+json` with a machine-readable `code` (`mfa_required`, `org_inactive`, `last_owner`, …). Request bodies are validated with the Zod schemas in `packages/contracts`, which the issuer app also uses for its forms. The generated OpenAPI document arrives in M5.
 
 ---
 
@@ -550,6 +594,7 @@ Upload a CSV (MVP limit: 10,000 rows / 5 MB, with a downloadable template) → m
 - **Graphic language** (angled lines, forge arc, shield point) is used sparingly on the landing and public pages, and not in the admin chrome.
 - **Voice:** the UI says **Create** and **Award** (the brand's verbs), while the API and code use the spec term `issue`. No hype, no overclaiming.
 - **Accessibility target:** WCAG 2.2 AA, checked automatically with axe in end-to-end tests. Light and dark themes in the admin.
+- **As built in M2:** the issuer app's semantic colors (shadcn/ui names such as `primary`, `muted`, `destructive`) are defined in `apps/web/src/styles/app.css` from the brand tokens, with a dark theme that follows the operating system. There are **no modal dialogs**: Radix's modal scroll lock injects inline styles, which the strict CSP (`style-src 'self'`) blocks. Confirmations happen in place and selects are native `<select>`s. The production build was checked for CSP violations.
 
 ---
 
@@ -561,7 +606,8 @@ Upload a CSV (MVP limit: 10,000 rows / 5 MB, with a downloadable template) → m
 | Tampering | DI proofs on credentials **and** on status lists |
 | Cross-tenant access | Org scope enforced in the data layer, cross-tenant test suite, RLS as hardening |
 | Account takeover | Better Auth; strong password hashing; login rate limits; TOTP MFA (encouraged for all, **required for owners/admins** on the hosted instance); email verification before any award |
-| CSRF | SameSite=Lax HttpOnly Secure cookies, Origin checks on state-changing requests, no credentialed CORS |
+| CSRF | SameSite=Lax HttpOnly Secure cookies, Origin checks on state-changing requests (Better Auth's own for `/api/auth`, credforge's for `/api/v1`), no credentialed CORS |
+| Database privileges | The app and worker connect as a restricted role: no DDL, read and append only on the audit log; migrations run as the owner (§7) |
 | API keys | Shown once, stored hashed, scoped, revocable, last-used tracking |
 | Malicious uploads | Size limits; file-type check by magic bytes; raster images re-encoded with `sharp` (which strips metadata); **SVG sanitized** (no scripts, `foreignObject` or external references); served with `nosniff` and a sandbox CSP |
 | Federated sign-in | No silent account merging; Microsoft email trusted only with `xms_edov`; provider tokens not stored; OAuth state and PKCE handled by Better Auth; owners/admins pass a credforge second factor after any sign-in method (§6.4) |
@@ -597,6 +643,8 @@ services:
     <<: *app
     command: ["node", "dist/migrate.js"]
     restart: "no"
+    environment:   # the owner; app and worker get DATABASE_URL with the restricted credforge_app role
+      MIGRATION_DATABASE_URL: postgres://credforge:…@db:5432/credforge
     depends_on:
       db: { condition: service_healthy }
 
@@ -643,10 +691,11 @@ For local development, `compose.dev.yml` runs only the backing services: Postgre
 |---|---|
 | `PUBLIC_BASE_URL` | `https://credforge.app`. ⚠️ **Permanent:** it is embedded in every signed credential. |
 | `CREDFORGE_MASTER_KEY` / `_FILE` | 32-byte key that encrypts issuer signing keys. ⚠️ **Back it up separately from the database.** |
-| `DATABASE_URL` | Postgres connection string |
-| `AUTH_SECRET` | Session signing secret |
+| `DATABASE_URL` | Postgres connection string for the app and worker (the restricted role) |
+| `MIGRATION_DATABASE_URL` | The database owner, used by `migrate` (defaults to `DATABASE_URL`). In compose both are built from `POSTGRES_PASSWORD` and `POSTGRES_APP_PASSWORD` |
+| `AUTH_SECRET` / `_FILE` | Session signing secret; also encrypts TOTP secrets, so it must not change once people use two-step verification |
 | `TRUST_PROXY` | Trust `X-Forwarded-*` from your nginx (loopback) |
-| `EMAIL_TRANSPORT` | `sendgrid` (credforge.app) · `smtp` (generic) · `log` (development: print to console) |
+| `EMAIL_TRANSPORT` | `sendgrid` (credforge.app, M3) · `smtp` (generic; Mailpit in development) · `log` (print to the log, local trials only). Required in production |
 | `SENDGRID_API_KEY` / `_FILE` | Restricted key with only the Mail Send permission |
 | `SENDGRID_WEBHOOK_PUBLIC_KEY` | Verifies Event Webhook signatures |
 | `SMTP_URL` | For `smtp` transport, e.g. `smtp://…@smtp.provider.com:2525` |
@@ -656,15 +705,15 @@ For local development, `compose.dev.yml` runs only the backing services: Postgre
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` / `_FILE` | Limited Spaces key: Read/Write/Delete on the app bucket only |
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY` / `_FILE` | Separate limited key, used only by the backup script |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` / `_FILE` | Enables "Continue with Google" |
-| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` / `_FILE` | Enables "Continue with Microsoft" |
+| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` / `_FILE`, `MICROSOFT_TENANT_ID` | Enables "Continue with Microsoft"; the tenant defaults to `common` (work, school and personal accounts) |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` / `_FILE` | Optional |
 | `REQUIRE_MFA_FOR_ADMINS` | `true` on credforge.app: owners/admins need a credforge second factor after any sign-in |
 | `SIGNUP_MODE` | `approval` (credforge.app) · `open` · `invite` |
-| `DEFAULT_ORG_DAILY_SEND_LIMIT` | Per-org daily award-email cap; platform admins can raise it per org; `0` disables it |
+| `DEFAULT_ORG_DAILY_SEND_LIMIT` | Per-org daily award-email cap; platform admins can raise it per org; `0` disables it (M3) |
 | `LANDING_PAGE` | `true` on credforge.app; self-hosters may disable it |
 | `LOG_LEVEL`, `SENTRY_DSN` (optional) | Observability |
 
-The app **refuses to start** if a required value is missing or malformed. It validates its configuration with Zod at boot.
+The app **refuses to start** if a required value is missing or malformed. It validates its configuration with Zod at boot. Any variable can come from a file with `NAME_FILE` (Docker secrets). Outside production, `AUTH_SECRET` and `CREDFORGE_MASTER_KEY` fall back to fixed development values; in production they are required. A provider's client ID without its secret (or the other way round) is an error. `REQUIRE_MFA_FOR_ADMINS` defaults to `true` and `SIGNUP_MODE` to `approval`.
 
 ### 13.3 DigitalOcean droplet + your nginx
 
@@ -731,7 +780,7 @@ The app **refuses to start** if a required value is missing or malformed. It val
 
 - **`packages/ob3`:** unit tests and golden fixtures. Every credential produced in tests is **verified twice**: by Digital Bazaar's verifier, and by an independent test verifier that shares no code with the signing path (`jsonld-streaming-parser` and `rdfjs-c14n` instead of jsonld.js and rdf-canonize, `node:crypto` Ed25519, the 1EdTech validator's key-resolution rules). It is also **validated against the official OB 3.0 JSON Schema**. Signing reproduces the W3C vc-di-eddsa test vectors exactly.
 - **Interop checks:** the 1EdTech OB 3.0 validator, and importing JSON and baked badges into common wallets and validators. These are a release gate for the credential format.
-- **API integration tests** run against a real Postgres (Testcontainers), including the cross-tenant suite.
+- **API integration tests** run against a real Postgres (Testcontainers), including the cross-tenant suite. Each test file gets its own database, migrated as the owner and used through the restricted app role, as in production. `TEST_DATABASE_URL` points them at an existing server instead. Google and Microsoft sign-in are tested through Better Auth's real callback, with only the provider's token endpoint stubbed.
 - **End-to-end tests** (Playwright) cover sign up → create achievement → award → claim → verify → revoke, with axe accessibility checks.
 - **Checks run locally for now:** `pnpm check` runs lint, typecheck and tests, and a git pre-push hook runs it automatically. CI workflow files (lint, typecheck, test, build, Trivy scan, publish image) are written in M0 but only activate once the repo is hosted.
 - **1EdTech certification** comes after the MVP; it requires 1EdTech membership. Until then, don't claim to be certified.
@@ -745,7 +794,7 @@ credforge-app/
 ├─ apps/
 │  ├─ server/        Fastify: API, auth, public SSR pages, serves the SPA
 │  │                 entrypoints: server.ts · worker.ts · migrate.ts · cli.ts
-│  └─ web/           React SPA (issuer app)
+│  └─ web/           React SPA (issuer app): TanStack Router/Query, shadcn/ui-style components
 ├─ packages/
 │  ├─ ob3/           credential engine: build · sign · verify · bake · status lists (no DB/HTTP)
 │  ├─ db/            Drizzle schema + migrations
@@ -786,6 +835,15 @@ Monorepo tooling: **pnpm workspaces**, TypeScript project references, ESLint + P
 - **Also passing:** every credential in the package tests passes both verifiers and the official schema.
 - **Next time:** repeat the validator check against real credentials on the live deployment before launch (M5).
 
+**M2 result (2026-10-15): done.**
+
+- **Demo path, checked in the browser against the dev stack:** sign up → confirm email (Mailpit) → name the org (pending) → forced two-step verification setup for the new owner → issuer profile with a generated Ed25519 key → `create-platform-admin` from the CLI → the admin sets a password, sets up two-step verification and approves the org in the Platform screen → the owner gets the approval email. The audit log has every step.
+- **Production stack:** the Docker image builds, `docker compose up` migrates, creates the restricted app role and starts healthy. The CLI works inside the container, `EMAIL_TRANSPORT=log` emails reach the worker log, and the built issuer app runs under the production CSP without violations.
+- **Tests:** 113 server tests (54 of them against Postgres: auth and the second-factor gate with simulated Google and Microsoft sign-in, orgs, invitations, approvals, issuers, the append-only audit log, and the cross-tenant suite) plus 8 contract tests. A credential signed with an issuer's stored, encrypted key verifies against the profile served at its `/issuers/{id}`.
+- **Issuer logo upload moves to M3** (decision 13): it needs the image pipeline (validation, sanitizing, resizing, storage on Spaces, content-addressed URLs) that M3 builds for badge images. Building it now would build M3's pipeline early.
+- **Carried into M3:** the pending-org test-award rule (awarding only to members' verified addresses), `daily_send_limit` with `DEFAULT_ORG_DAILY_SEND_LIMIT`, the SendGrid transport and delivery tracking.
+- **Not yet built:** key rotation and master key rotation (CLI and UI; M5), domain verification (M5), changing a user's email address, sign-in rate limits are Better Auth's in-memory ones (production only).
+
 ### After the MVP
 
 - **Phase 2:** VC-JWT proofs (RS256); webhooks; a recipient "My badges" page (magic link, every badge sent to one email); reminder emails; a built-in badge designer; a certificate designer with server-rendered PDFs; **per-org enterprise SSO (OIDC/SAML)** tied to verified domains; **passkeys**; "join my org" requests for users whose verified email matches an org's verified domain; Spaces CDN on `assets.credforge.app` if traffic warrants it; custom sending domains per org.
@@ -815,5 +873,9 @@ Monorepo tooling: **pnpm workspaces**, TypeScript project references, ESLint + P
 | 8 | Name casing | **credforge** (lowercase, as in the brand guide) everywhere | Default; owner can override |
 | 9 | Federated sign-in | **Google and Microsoft at launch** (M2). GitHub optional. Per-org enterprise SSO in phase 2. See §6.4. | Owner, 2026-10-14 |
 | 10 | File storage | **DigitalOcean Spaces:** private buckets, per-bucket limited keys, images served through permanent content-addressed credforge.app URLs. See §5.4 and §13.5. | Owner, 2026-10-14 |
+| 11 | Organizations, members, invitations | **credforge's own `/api/v1` resources**, not Better Auth's organization plugin. Every change and its audit event commit in one transaction, status gates (pending/suspended) apply in one place, and API keys (M5) will use the same endpoints. Better Auth handles identity only. See §2, §7, §10. | M2, 2026-10-15 |
+| 12 | Database privileges | **Two roles.** `migrate` runs as the owner and creates a restricted app role (no DDL; SELECT and INSERT only on `audit_event`); triggers also block UPDATE, DELETE and TRUNCATE of the audit log for every role. New setting `POSTGRES_APP_PASSWORD`. See §7. | M2, 2026-10-15 |
+| 13 | Issuer logo upload | **Moved to M3**, with the image pipeline it depends on. See §17. | M2, 2026-10-15 |
+| 14 | Second-factor gate | **Per-session `mfa_verified_at`.** Required for owners, admins **and platform admins**; anyone who turned two-step verification on is also challenged after Google or Microsoft sign-in. "Trust this device" isn't offered. See §6.4. | M2, 2026-10-15 |
 
-**Still open (not blocking M0–M1):** droplet size and region (match it to your Spaces region), the SendGrid account and sending-domain setup, the Google Cloud and Microsoft Entra app registrations, the platform admin's email address, and the privacy policy and terms content (needed before Google sign-in can go to production).
+**Still open (not blocking M0–M2):** droplet size and region (match it to your Spaces region), the SendGrid account and sending-domain setup, the Google Cloud and Microsoft Entra app registrations, the platform admin's email address, and the privacy policy and terms content (needed before Google sign-in can go to production).

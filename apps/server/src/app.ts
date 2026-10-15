@@ -1,25 +1,46 @@
 import { randomUUID } from 'node:crypto';
 import helmet from '@fastify/helmet';
-import Fastify, { type FastifyServerOptions } from 'fastify';
+import Fastify, {
+  type FastifyBaseLogger,
+  type FastifyServerOptions,
+  type RouteOptions,
+} from 'fastify';
+import { apiV1 } from './api/v1';
+import { authRoutes } from './auth/routes';
 import type { Config } from './config';
 import { loggerOptions } from './logger';
 import { resolvePublicAssets } from './public/assets';
+import { publicIssuerRoutes } from './public/issuer-routes';
 import { createNotFoundHandler, publicPages } from './public/routes';
 import { healthRoutes } from './routes/health';
+import type { Services } from './services';
 import { webApp } from './web-app';
 
 export interface AppDependencies {
   config: Config;
   checkDatabase: () => Promise<void>;
+  /** Database-backed features (auth, API, issuer pages). Left out by tests of the bare shell. */
+  services?: Services;
   /** Override logging (tests pass `false`). */
   logger?: FastifyServerOptions['logger'];
+  /** A logger shared with code outside Fastify (server.ts). */
+  loggerInstance?: FastifyBaseLogger;
+  /** Sees every route as it is registered (the cross-tenant tests check they cover them all). */
+  onRoute?: (route: RouteOptions) => void;
 }
 
 const REQUEST_ID_PATTERN = /^[\w-]{8,128}$/;
 
-export async function buildApp({ config, checkDatabase, logger }: AppDependencies) {
+export async function buildApp({
+  config,
+  checkDatabase,
+  services,
+  logger,
+  loggerInstance,
+  onRoute,
+}: AppDependencies) {
   const app = Fastify({
-    logger: logger ?? loggerOptions(config),
+    ...(loggerInstance ? { loggerInstance } : { logger: logger ?? loggerOptions(config) }),
     trustProxy: config.trustProxy,
     // Reuse a well-formed X-Request-Id from the reverse proxy; otherwise mint one.
     requestIdHeader: false,
@@ -31,6 +52,7 @@ export async function buildApp({ config, checkDatabase, logger }: AppDependencie
     },
   });
 
+  if (onRoute) app.addHook('onRoute', onRoute);
   app.addHook('onSend', async (request, reply) => {
     reply.header('x-request-id', request.id);
   });
@@ -59,6 +81,11 @@ export async function buildApp({ config, checkDatabase, logger }: AppDependencie
   const assets = resolvePublicAssets(config);
   await app.register(healthRoutes, { checkDatabase });
   await app.register(publicPages, { config, assets });
+  if (services) {
+    await app.register(authRoutes, services);
+    await app.register(apiV1, { services, prefix: '/api/v1' });
+    await app.register(publicIssuerRoutes, { services, assets });
+  }
   await app.register(webApp, { webDistDir: config.webDistDir });
   app.setNotFoundHandler(createNotFoundHandler({ config, assets }));
 

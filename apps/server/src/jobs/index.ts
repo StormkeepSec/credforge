@@ -1,16 +1,37 @@
 import type { PgBoss } from 'pg-boss';
 import type { Logger } from 'pino';
+import { EMAIL_QUEUE_OPTIONS, emailJobHandler } from '../email/outbox';
+import type { EmailMessage, EmailTransport } from '../email/transport';
+import { QUEUES } from './queues';
 
-/** Queue names. Keep them stable: jobs already enqueued refer to them by name. */
-export const QUEUES = {
-  /** Proves scheduling and job processing work end to end; later feeds worker health. */
-  heartbeat: 'system.heartbeat',
-} as const;
+export { QUEUES } from './queues';
 
-export async function registerJobs(boss: PgBoss, log: Logger): Promise<void> {
+/**
+ * Creates every queue. Runs in `migrate` (so the app can enqueue before the worker has ever
+ * started) and again in the worker; both are idempotent.
+ */
+export async function createQueues(boss: PgBoss): Promise<void> {
   await boss.createQueue(QUEUES.heartbeat);
+  await boss.createQueue(QUEUES.email, EMAIL_QUEUE_OPTIONS);
+}
+
+export interface JobDependencies {
+  emailTransport: EmailTransport;
+}
+
+export async function registerJobs(
+  boss: PgBoss,
+  log: Logger,
+  { emailTransport }: JobDependencies,
+): Promise<void> {
+  await createQueues(boss);
   await boss.schedule(QUEUES.heartbeat, '*/5 * * * *');
   await boss.work(QUEUES.heartbeat, async ([job]) => {
     log.debug({ jobId: job?.id }, 'heartbeat');
+  });
+
+  const sendEmail = emailJobHandler(emailTransport, log);
+  await boss.work<EmailMessage>(QUEUES.email, async (jobs) => {
+    for (const job of jobs) await sendEmail(job.data);
   });
 }

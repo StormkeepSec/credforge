@@ -1,0 +1,22 @@
+{
+  "name": "@credforge/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "credforge API contracts shared by the server and the issuer app: roles, permissions, request schemas and response types.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.11"
+  }
+}

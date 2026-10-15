@@ -3,14 +3,16 @@
 **Make achievement mean more.** credforge helps organizations create and award
 [Open Badges 3.0](https://www.imsglobal.org/spec/ob/v3p0) digital badges.
 
-> **Status:** early development. M0 (foundations) and M1 (the credential engine in `packages/ob3`)
-> are done. See the [design plan](docs/design-plan.md) for the architecture and the roadmap.
+> **Status:** early development. M0 (foundations), M1 (the credential engine in `packages/ob3`) and
+> M2 (accounts, organizations and issuers) are done. See the [design plan](docs/design-plan.md) for
+> the architecture and the roadmap.
 
 ## Requirements
 
 - **Node.js 24** (LTS)
 - **pnpm 10**: enable it once with `corepack enable`, or install it with `npm install -g pnpm@10`
-- **Docker** (Docker Desktop on Windows/macOS) for PostgreSQL and the production stack
+- **Docker** (Docker Desktop on Windows/macOS) for PostgreSQL, the integration tests and the
+  production stack
 
 ## Develop
 
@@ -20,12 +22,21 @@ pnpm infra:up      # PostgreSQL + Mailpit in Docker
 pnpm dev           # migrate, then run the server, worker and web app with reload
 ```
 
-Open **http://localhost:5173**. Vite serves the issuer app and forwards the API, health checks
-and server-rendered pages to the Fastify server on port 3000. Mailpit's inbox is at
-http://localhost:8025.
+Open **http://localhost:5173** and create an account. Every email the app sends (confirmation
+links, invitations, approval notices) lands in Mailpit at http://localhost:8025.
 
-No configuration is needed for development. To override a default, copy
-`.env.development.example` to `.env.development`.
+No configuration is needed for development. To override a default (for example to try Google or
+Microsoft sign-in with development OAuth clients), copy `.env.development.example` to
+`.env.development`.
+
+To approve organizations you need a platform admin. Create one (or promote an existing account):
+
+```bash
+pnpm --filter @credforge/server cli create-platform-admin --email you@example.org
+```
+
+It prints a one-time link to set the password. Owners, admins and platform admins must turn on
+two-step verification (TOTP) before they can continue, whichever way they sign in.
 
 | Command | What it does |
 |---|---|
@@ -36,31 +47,51 @@ No configuration is needed for development. To override a default, copy
 | `pnpm db:migrate` | Apply migrations to the development database |
 | `pnpm infra:down` | Stop PostgreSQL and Mailpit (data is kept) |
 
+### Tests
+
+`pnpm test` runs unit tests and the server's integration tests. The integration tests use a real
+PostgreSQL: Testcontainers starts `postgres:18-alpine`, so **Docker must be running**. To use an
+existing server instead, set `TEST_DATABASE_URL` to a superuser connection string; each test file
+creates and drops its own database there. The integration suite includes a cross-tenant test that
+tries every organization-scoped endpoint against another organization's data.
+
 ## Run the production stack
 
 ```bash
-cp .env.example .env   # set PUBLIC_BASE_URL and POSTGRES_PASSWORD
+cp .env.example .env   # fill in PUBLIC_BASE_URL, the two database passwords, AUTH_SECRET,
+                       # CREDFORGE_MASTER_KEY and the email settings
 docker compose up -d --build
+docker compose exec app node dist/cli.js create-platform-admin --email you@example.org
 ```
 
 This starts `db`, runs `migrate` once, and then starts `app` and `worker`. The app listens on
 `127.0.0.1:3000` for a reverse proxy (nginx with TLS) to forward to. Check it with
 `curl http://127.0.0.1:3000/readyz`.
 
-`PUBLIC_BASE_URL` is **permanent**: every credential embeds URLs under it, and the app refuses to
-start if it changes. For a local trial use `http://localhost:3000`, then remove the volumes
-(`docker compose down -v`) before setting the real domain.
+- **`PUBLIC_BASE_URL` is permanent**: every credential embeds URLs under it, and the app refuses to
+  start if it changes. For a local trial use `http://localhost:3000`, then remove the volumes
+  (`docker compose down -v`) before setting the real domain.
+- **`CREDFORGE_MASTER_KEY` encrypts every issuer's signing key. Back it up separately from the
+  database.** The app refuses to start with a different key than the one it was set up with.
+- **Two database roles.** `migrate` runs as the database owner and creates a restricted role for
+  the app and worker (`POSTGRES_APP_PASSWORD`). That role can't run DDL, and it can only read and
+  append to the audit log.
+- **Google and Microsoft sign-in** turn on when their client ID and secret are set. Redirect URIs
+  are `{PUBLIC_BASE_URL}/api/auth/callback/google` and `…/callback/microsoft`. For Microsoft, add
+  the optional ID token claim `xms_edov`; without it credforge sends its own confirmation email
+  before a Microsoft account can be used.
 
 ## Repository layout
 
 ```text
-apps/server     Fastify: REST API, server-rendered public pages, worker, migrations runner
-apps/web        React issuer app (Vite) and the stylesheet for public pages
-packages/db     Database schema and SQL migrations (Drizzle ORM)
-packages/ob3    Credential engine: build, sign, verify, bake and status lists for Open Badges 3.0
-packages/ui     Brand tokens (Tailwind CSS theme)
-docs/           Design plan and other documentation
-branding/       Brand guide, copy kit and logo assets
+apps/server         Fastify: REST API, auth, server-rendered public pages, worker, migrations, CLI
+apps/web            React issuer app (Vite, TanStack Router/Query, shadcn/ui) and the public stylesheet
+packages/contracts  Roles, permissions, request schemas and response types shared by server and app
+packages/db         Database schema and SQL migrations (Drizzle ORM)
+packages/ob3        Credential engine: build, sign, verify, bake and status lists for Open Badges 3.0
+packages/ui         Brand tokens (Tailwind CSS theme)
+docs/               Design plan and other documentation
+branding/           Brand guide, copy kit and logo assets
 ```
 
 ## License

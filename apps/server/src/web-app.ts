@@ -9,7 +9,17 @@ export interface WebAppOptions {
 }
 
 /** Paths that load the issuer app (React SPA); its client-side router takes it from there. */
-export const SPA_ROUTES = ['/app', '/app/*', '/login', '/signup', '/reset-password', '/invite/*'];
+export const SPA_ROUTES = [
+  '/app',
+  '/app/*',
+  '/login',
+  '/signup',
+  '/forgot-password',
+  '/reset-password',
+  '/verify-email',
+  '/two-factor',
+  '/invite/*',
+];
 
 /**
  * Serves the built issuer app and its static assets in production.

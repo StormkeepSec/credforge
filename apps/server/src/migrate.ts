@@ -1,17 +1,21 @@
-import { createDatabase, migrateDatabase } from '@credforge/db';
+import { connectionUser, createDatabase, grantAppRole, migrateDatabase } from '@credforge/db';
 import { PgBoss } from 'pg-boss';
 import { pino } from 'pino';
 import { loadConfigOrExit } from './config';
+import { createKeyEncryption } from './crypto/key-encryption';
 import { loadDevEnvFile } from './dev-env';
-import { enforcePublicBaseUrl } from './instance';
+import { enforceMasterKey, enforcePublicBaseUrl } from './instance';
+import { createQueues } from './jobs';
 import { loggerOptions } from './logger';
 
-// One-shot: applies database migrations, installs/upgrades the job queue schema, and records
-// PUBLIC_BASE_URL. Runs before `app` and `worker` start (docker compose `migrate` service).
+// One-shot, as the database owner (MIGRATION_DATABASE_URL): applies database migrations,
+// installs or upgrades the job queue schema, (re)grants the app's restricted role, and records
+// PUBLIC_BASE_URL and the master key check. Runs before `app` and `worker` start (docker compose
+// `migrate` service).
 loadDevEnvFile();
 const config = loadConfigOrExit();
 const log = pino({ ...loggerOptions(config), name: 'migrate' });
-const { db, pool } = createDatabase(config.databaseUrl, {
+const { db, pool } = createDatabase(config.migrationDatabaseUrl, {
   applicationName: 'credforge-migrate',
   max: 1,
 });
@@ -21,17 +25,32 @@ try {
   log.info({ migrationsDir: config.migrationsDir }, 'database migrations applied');
 
   const boss = new PgBoss({
-    connectionString: config.databaseUrl,
+    connectionString: config.migrationDatabaseUrl,
     application_name: 'credforge-migrate',
     supervise: false,
     schedule: false,
     registerInstance: false,
   });
   await boss.start();
+  await createQueues(boss);
   await boss.stop({ graceful: false });
   log.info('job queue schema ready');
 
+  const app = connectionUser(config.databaseUrl);
+  const owner = connectionUser(config.migrationDatabaseUrl);
+  if (app.user !== owner.user) {
+    await grantAppRole(pool, { role: app.user, password: app.password, extraSchemas: ['pgboss'] });
+    log.info({ role: app.user }, 'app database role ready (audit log: read and append only)');
+  } else {
+    log.warn(
+      { role: app.user },
+      'DATABASE_URL uses the database owner. The audit log is still append-only (triggers), but ' +
+        'for least privilege set MIGRATION_DATABASE_URL to the owner and DATABASE_URL to a separate role.',
+    );
+  }
+
   await enforcePublicBaseUrl(db, config, log);
+  await enforceMasterKey(db, createKeyEncryption(config.masterKey), log);
 } catch (err) {
   log.fatal({ err }, 'migration failed');
   process.exitCode = 1;

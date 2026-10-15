@@ -1,3 +1,96 @@
 /* Styles for the issuer app (React SPA). */
 @import "tailwindcss";
 @import "@credforge/ui/theme.css";
+
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+/*
+ * Semantic colors for the app (shadcn/ui naming), built from the brand tokens. Light surfaces use
+ * ink for primary buttons and the *-strong shades for links (design plan §11.3). Dark mode follows
+ * the operating system.
+ */
+:root {
+  --background: var(--color-canvas);
+  --foreground: var(--color-ink);
+  --card: #ffffff;
+  --card-foreground: var(--color-ink);
+  --muted: #f3f4f6;
+  --muted-foreground: var(--color-ink-muted);
+  --border: #e5e7eb;
+  --input: #d1d5db;
+  --primary: var(--color-ink);
+  --primary-foreground: var(--color-canvas);
+  --secondary: #eef0f3;
+  --secondary-foreground: var(--color-ink);
+  --accent: #e8f3f3;
+  --accent-foreground: var(--color-ink);
+  --destructive: var(--color-danger);
+  --destructive-foreground: #ffffff;
+  --link: var(--color-signal-strong);
+  --ring: var(--color-signal-strong);
+  --sidebar: #ffffff;
+  --success: var(--color-success);
+  --warning: var(--color-warning);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0b1120;
+    --foreground: #f3f4f6;
+    --card: #111827;
+    --card-foreground: #f3f4f6;
+    --muted: #1a2332;
+    --muted-foreground: #c3cad5;
+    --border: #273244;
+    --input: #3a4658;
+    --primary: var(--color-canvas);
+    --primary-foreground: var(--color-ink);
+    --secondary: #1f2a3b;
+    --secondary-foreground: #f3f4f6;
+    --accent: #12292c;
+    --accent-foreground: #f3f4f6;
+    --destructive: #f97066;
+    --destructive-foreground: var(--color-ink);
+    --link: #5cc2c0;
+    --ring: #5cc2c0;
+    --sidebar: #0f1726;
+    --success: #5cc2c0;
+    --warning: #f5a65b;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-link: var(--link);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-ok: var(--success);
+  --color-caution: var(--warning);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+  }
+}

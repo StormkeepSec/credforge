@@ -4,7 +4,24 @@ import pg from 'pg';
 import * as schema from './schema';
 
 // Query helpers, re-exported so every package uses this package's copy of drizzle-orm.
-export { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+export {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
+export { APPEND_ONLY_TABLES, type AppRoleOptions, connectionUser, grantAppRole } from './app-role';
 export * from './schema';
 
 export interface DatabaseOptions {
@@ -25,6 +42,8 @@ export function createDatabase(connectionString: string, options: DatabaseOption
 }
 
 export type Database = ReturnType<typeof createDatabase>['db'];
+/** A transaction handle, or the database itself: anything that can run queries. */
+export type Queryable = Database | Parameters<Parameters<Database['transaction']>[0]>[0];
 
 /** Applies pending SQL migrations from `migrationsFolder` (packages/db/migrations). */
 export async function migrateDatabase(db: Database, migrationsFolder: string): Promise<void> {
