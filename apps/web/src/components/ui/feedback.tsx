@@ -24,14 +24,16 @@ interface AlertProps
   extends Omit<ComponentProps<'div'>, 'title'>,
     VariantProps<typeof alertVariants> {
   title?: ReactNode;
+  /** Announce the message when it appears (default). Off for banners that are part of the page. */
+  live?: boolean;
 }
 
 /** A message box. Errors are announced to screen readers as they appear. */
-export function Alert({ className, variant, title, children, ...props }: AlertProps) {
+export function Alert({ className, variant, title, live = true, children, ...props }: AlertProps) {
   const Icon = icons[variant ?? 'info'];
   return (
     <div
-      role={variant === 'error' ? 'alert' : 'status'}
+      role={live ? (variant === 'error' ? 'alert' : 'status') : undefined}
       className={cn(alertVariants({ variant }), className)}
       {...props}
     >

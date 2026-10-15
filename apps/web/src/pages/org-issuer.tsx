@@ -32,18 +32,23 @@ function toForm(issuer?: Issuer): Form {
 function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={async () => {
-        await navigator.clipboard.writeText(value);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }}
-    >
-      <Copy aria-hidden="true" />
-      {copied ? 'Copied' : label}
-    </Button>
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={async () => {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }}
+      >
+        <Copy aria-hidden="true" />
+        {copied ? 'Copied' : label}
+      </Button>
+      <span role="status" className="sr-only">
+        {copied ? 'Copied to the clipboard' : ''}
+      </span>
+    </>
   );
 }
 
@@ -114,7 +119,7 @@ function IssuerForm({
             error={errors.name}
           >
             {(props) => (
-              <Input {...props} value={form.name} onChange={set('name')} disabled={readOnly} />
+              <Input {...props} value={form.name} onChange={set('name')} readOnly={readOnly} />
             )}
           </Field>
           <Field
@@ -129,7 +134,7 @@ function IssuerForm({
                 placeholder="https://example.org"
                 value={form.url}
                 onChange={set('url')}
-                disabled={readOnly}
+                readOnly={readOnly}
               />
             )}
           </Field>
@@ -145,7 +150,7 @@ function IssuerForm({
                 placeholder="badges@example.org"
                 value={form.email}
                 onChange={set('email')}
-                disabled={readOnly}
+                readOnly={readOnly}
               />
             )}
           </Field>
@@ -155,7 +160,7 @@ function IssuerForm({
                 {...props}
                 value={form.description}
                 onChange={set('description')}
-                disabled={readOnly}
+                readOnly={readOnly}
               />
             )}
           </Field>

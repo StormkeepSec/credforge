@@ -94,6 +94,7 @@ function OrgCard({ org }: { org: PlatformOrg }) {
             {(props) => (
               <Textarea
                 {...props}
+                autoFocus
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
               />
@@ -156,30 +157,29 @@ export function PlatformPage() {
         title="Platform"
         description="Approve new organizations before they can award badges to people outside their team."
       />
-      <div
-        role="tablist"
-        aria-label="Organizations by status"
-        className="mb-6 flex flex-wrap gap-2"
-      >
-        {TABS.map((item) => (
-          <button
-            key={item.status}
-            type="button"
-            role="tab"
-            aria-selected={tab === item.status}
-            onClick={() => setTab(item.status)}
-            className={cn(
-              'rounded-full border px-4 py-1.5 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-ring',
-              tab === item.status
-                ? 'border-primary bg-primary text-primary-foreground'
-                : 'bg-card hover:bg-muted',
-            )}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
-      <div role="tabpanel" className="grid gap-4">
+      {/* A filter, so toggle buttons rather than tabs (which promise arrow-key navigation). */}
+      <fieldset className="mb-6 min-w-0">
+        <legend className="sr-only">Show organizations</legend>
+        <div className="flex flex-wrap gap-2">
+          {TABS.map((item) => (
+            <button
+              key={item.status}
+              type="button"
+              aria-pressed={tab === item.status}
+              onClick={() => setTab(item.status)}
+              className={cn(
+                'rounded-full border px-4 py-1.5 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+                tab === item.status
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'bg-card hover:bg-muted',
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+      <div className="grid gap-4">
         {isPending && <Spinner />}
         {isError && <Alert variant="error">{errorMessage(error)}</Alert>}
         {data?.orgs.length === 0 && (

@@ -19,6 +19,17 @@ export const EMAIL_QUEUE_OPTIONS = {
   deleteAfterSeconds: 24 * 60 * 60,
 } as const;
 
+/**
+ * How the worker pulls email jobs. One job per fetch, so a failed send retries only that email.
+ * pg-boss's default (one poller, a fetch every 2 s) caps sending at 30 a minute and delays
+ * verification emails; four pollers every 0.5 s send a backlog at roughly 8 a second.
+ */
+export const EMAIL_WORK_OPTIONS = {
+  batchSize: 1,
+  localConcurrency: 4,
+  pollingIntervalSeconds: 0.5,
+} as const;
+
 export function createQueueOutbox(boss: Pick<PgBoss, 'send'>): EmailOutbox {
   return {
     async send(message) {

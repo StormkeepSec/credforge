@@ -93,7 +93,7 @@ function AuditLog({ orgId }: { orgId: string }) {
             </time>
             <div className="min-w-0">
               <p className="font-semibold">{describe(event.action)}</p>
-              <p className="truncate text-muted-foreground">
+              <p className="wrap-anywhere text-muted-foreground">
                 {event.actor.label ?? event.actor.type}
                 {details(event) && ` · ${details(event)}`}
               </p>

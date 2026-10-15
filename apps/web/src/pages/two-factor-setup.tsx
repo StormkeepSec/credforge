@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Download, ShieldCheck } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { PageHeader } from '../components/app-shell';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -51,6 +51,11 @@ export function TwoFactorSetupPage() {
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // The button that led here is gone once the step changes: put focus on the new step's heading.
+  const stepHeading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (step.name !== 'start') stepHeading.current?.focus();
+  }, [step.name]);
   if (!me) return <Spinner />;
 
   const hasPassword = me.signInMethods.some((method) => method.provider === 'credential');
@@ -157,7 +162,9 @@ export function TwoFactorSetupPage() {
       {step.name === 'scan' && (
         <Card>
           <CardHeader>
-            <CardTitle>2. Scan this code with the app</CardTitle>
+            <CardTitle ref={stepHeading} tabIndex={-1} className="outline-none">
+              2. Scan this code with the app
+            </CardTitle>
             <CardDescription>Then enter the 6-digit code the app shows.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-6 sm:grid-cols-[auto_1fr]">
@@ -193,7 +200,9 @@ export function TwoFactorSetupPage() {
       {step.name === 'codes' && (
         <Card>
           <CardHeader>
-            <CardTitle>3. Save your backup codes</CardTitle>
+            <CardTitle ref={stepHeading} tabIndex={-1} className="outline-none">
+              3. Save your backup codes
+            </CardTitle>
             <CardDescription>
               If you lose your phone, each of these codes signs you in once. Keep them somewhere
               safe, like a password manager. They won’t be shown again.

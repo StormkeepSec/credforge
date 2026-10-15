@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { CheckCircle2, Circle, Clock } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { PageHeader } from '../components/app-shell';
-import { OrgStatusBadge, OrgStatusBanner } from '../components/org-status';
+import { isWritable, OrgStatusBadge, OrgStatusBanner } from '../components/org-status';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Spinner } from '../components/ui/feedback';
 import { queries } from '../lib/api';
@@ -58,7 +58,7 @@ export function OrgOverviewPage({ orgId }: { orgId: string }) {
 
   const hasIssuer = (issuers.data?.issuers.length ?? 0) > 0;
   const hasTeam = (members.data?.members.length ?? 0) > 1;
-  const canEdit = org.permissions.includes('issuer:update');
+  const canEdit = org.permissions.includes('issuer:update') && isWritable(org);
 
   return (
     <>

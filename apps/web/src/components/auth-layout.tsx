@@ -1,11 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
 import { queries } from '../lib/api';
 import { authClient, PROVIDER_LABELS, type SocialProvider } from '../lib/auth-client';
+import { useDocumentTitle } from '../lib/utils';
 import { Wordmark } from './brand';
 import { Button } from './ui/button';
 
-/** Centered single-card layout for sign-in, sign-up and the other account screens. */
+/**
+ * Centered single-card layout for sign-in, sign-up and the other account screens. When a screen
+ * swaps its content for the next step (a new title), focus moves to the heading so screen reader
+ * and keyboard users land on the new step instead of the top of the page.
+ */
 export function AuthLayout({
   title,
   description,
@@ -17,12 +22,29 @@ export function AuthLayout({
   children: ReactNode;
   footer?: ReactNode;
 }) {
+  useDocumentTitle(title);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const shownTitle = useRef(title);
+  useEffect(() => {
+    if (shownTitle.current === title) return;
+    shownTitle.current = title;
+    heading.current?.focus();
+  }, [title]);
+
   return (
     <div className="flex min-h-screen flex-col items-center px-4 py-10 sm:py-16">
-      <Wordmark to="/" className="mb-8" />
+      <header className="mb-8">
+        <Wordmark to="/" />
+      </header>
       <main className="w-full max-w-md">
         <div className="rounded-xl border bg-card p-6 shadow-xs sm:p-8">
-          <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+          <h1
+            ref={heading}
+            tabIndex={-1}
+            className="text-2xl font-bold tracking-tight outline-none"
+          >
+            {title}
+          </h1>
           {description && <div className="mt-2 text-sm text-muted-foreground">{description}</div>}
           <div className="mt-6">{children}</div>
         </div>

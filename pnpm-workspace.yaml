@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - e2e
 
 # Run package scripts through pnpm's cross-platform shell so the same
 # scripts work on Windows, macOS, Linux and in Docker.

@@ -17,6 +17,7 @@
     "format": "biome check --write .",
     "test": "pnpm -r --if-present run test",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "test:e2e": "pnpm --filter @credforge/e2e run test:e2e",
     "db:generate": "pnpm --filter @credforge/db run generate",
     "db:migrate": "pnpm --filter @credforge/server run migrate",
     "infra:up": "docker compose -f compose.dev.yml up -d",

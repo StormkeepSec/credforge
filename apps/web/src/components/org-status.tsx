@@ -23,7 +23,12 @@ export function OrgStatusBadge({ status }: { status: OrgStatus }) {
 export function OrgStatusBanner({ org }: { org: OrgDetails }) {
   if (org.status === 'pending') {
     return (
-      <Alert variant="warning" title={`${org.name} is waiting for approval`} className="mb-8">
+      <Alert
+        live={false}
+        variant="warning"
+        title={`${org.name} is waiting for approval`}
+        className="mb-8"
+      >
         You can set up your issuer profile and invite your team now. Once achievements arrive,
         you’ll be able to test-award them to your own members. Awarding to anyone else opens when a
         platform admin approves the organization; we’ll email the owners.
@@ -32,7 +37,7 @@ export function OrgStatusBanner({ org }: { org: OrgDetails }) {
   }
   if (org.status === 'suspended') {
     return (
-      <Alert variant="error" title={`${org.name} is suspended`} className="mb-8">
+      <Alert live={false} variant="error" title={`${org.name} is suspended`} className="mb-8">
         It can’t award badges or send email, and its settings are read-only. Badges it already
         awarded stay verifiable.{org.statusReason && ` Reason: ${org.statusReason}`}
       </Alert>
@@ -40,7 +45,7 @@ export function OrgStatusBanner({ org }: { org: OrgDetails }) {
   }
   if (org.status === 'declined') {
     return (
-      <Alert variant="error" title={`${org.name} wasn’t approved`} className="mb-8">
+      <Alert live={false} variant="error" title={`${org.name} wasn’t approved`} className="mb-8">
         It can’t award badges on this credforge site, and its settings are read-only.
         {org.statusReason && ` Reason: ${org.statusReason}`}
       </Alert>

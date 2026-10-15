@@ -178,28 +178,27 @@ export function ResetPasswordPage({ search }: { search: { token?: string; error?
   }
 
   return (
-    <AuthLayout title="Choose a new password">
+    <AuthLayout title={done ? 'Password updated' : 'Choose a new password'}>
       {done ? (
         <div className="grid gap-4">
-          <Alert variant="success" title="Password updated">
+          <Alert variant="success">
             You were signed out everywhere. Sign in with your new password.
           </Alert>
           <Button asChild>
             <Link to="/login">Sign in</Link>
           </Button>
         </div>
+      ) : !search.token ? (
+        // Without a token there's nothing to submit: offer the way to get one instead of a form.
+        <div className="grid gap-4">
+          <Alert variant="error">{error}</Alert>
+          <Button asChild>
+            <Link to="/forgot-password">Get a new link</Link>
+          </Button>
+        </div>
       ) : (
         <form onSubmit={onSubmit} className="grid gap-4" noValidate>
-          {error && (
-            <Alert variant="error">
-              {error}{' '}
-              {!search.token && (
-                <Link to="/forgot-password" className={linkClass}>
-                  Get a new link
-                </Link>
-              )}
-            </Alert>
-          )}
+          {error && <Alert variant="error">{error}</Alert>}
           <Field label="New password" description="At least 10 characters.">
             {(props) => (
               <Input
@@ -211,7 +210,7 @@ export function ResetPasswordPage({ search }: { search: { token?: string; error?
               />
             )}
           </Field>
-          <Button type="submit" pending={pending} disabled={!search.token}>
+          <Button type="submit" pending={pending}>
             Save password
           </Button>
         </form>

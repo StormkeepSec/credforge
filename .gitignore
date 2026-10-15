@@ -4,6 +4,11 @@ coverage/
 *.tsbuildinfo
 .vite/
 
+# Playwright: signed-in states, results and reports from `pnpm test:e2e`
+e2e/.auth/
+e2e/test-results/
+e2e/playwright-report/
+
 # Environment and secrets (templates are .env.example / .env.development.example)
 .env
 .env.*

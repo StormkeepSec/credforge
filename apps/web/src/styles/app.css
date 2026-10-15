@@ -7,7 +7,8 @@
 /*
  * Semantic colors for the app (shadcn/ui naming), built from the brand tokens. Light surfaces use
  * ink for primary buttons and the *-strong shades for links (design plan §11.3). Dark mode follows
- * the operating system.
+ * the operating system. Control borders (`input`) keep 3:1 against cards and the sidebar, and
+ * placeholders 4.5:1, so empty fields stay visible and hints don't read as typed values (WCAG 2.2 AA).
  */
 :root {
   --background: var(--color-canvas);
@@ -17,7 +18,8 @@
   --muted: #f3f4f6;
   --muted-foreground: var(--color-ink-muted);
   --border: #e5e7eb;
-  --input: #d1d5db;
+  --input: #878e99; /* 3.30:1 on card */
+  --placeholder: #6b7280; /* 4.83:1 on card */
   --primary: var(--color-ink);
   --primary-foreground: var(--color-canvas);
   --secondary: #eef0f3;
@@ -43,7 +45,8 @@
     --muted: #1a2332;
     --muted-foreground: #c3cad5;
     --border: #273244;
-    --input: #3a4658;
+    --input: #64748b; /* 3.73:1 on card */
+    --placeholder: #8b95a5; /* 5.86:1 on card */
     --primary: var(--color-canvas);
     --primary-foreground: var(--color-ink);
     --secondary: #1f2a3b;
@@ -70,6 +73,7 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
+  --color-placeholder: var(--placeholder);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
@@ -92,5 +96,11 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+  }
+  /* Below lg the app header is sticky: keep focused and linked-to elements from sliding under it. */
+  @media (width < 64rem) {
+    html {
+      scroll-padding-top: 4.5rem;
+    }
   }
 }

@@ -1,6 +1,6 @@
 import type { PgBoss } from 'pg-boss';
 import type { Logger } from 'pino';
-import { EMAIL_QUEUE_OPTIONS, emailJobHandler } from '../email/outbox';
+import { EMAIL_QUEUE_OPTIONS, EMAIL_WORK_OPTIONS, emailJobHandler } from '../email/outbox';
 import type { EmailMessage, EmailTransport } from '../email/transport';
 import { QUEUES } from './queues';
 
@@ -31,7 +31,7 @@ export async function registerJobs(
   });
 
   const sendEmail = emailJobHandler(emailTransport, log);
-  await boss.work<EmailMessage>(QUEUES.email, async (jobs) => {
+  await boss.work<EmailMessage>(QUEUES.email, EMAIL_WORK_OPTIONS, async (jobs) => {
     for (const job of jobs) await sendEmail(job.data);
   });
 }

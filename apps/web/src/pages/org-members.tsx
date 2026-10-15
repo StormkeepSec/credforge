@@ -63,7 +63,7 @@ function InviteForm({ orgId, roles }: { orgId: string; roles: readonly OrgRole[]
       {invite.isError && !errors.email && (
         <Alert variant="error">{errorMessage(invite.error)}</Alert>
       )}
-      <div className="grid gap-4 sm:grid-cols-[1fr_12rem_auto] sm:items-end">
+      <div className="grid gap-4 sm:grid-cols-[1fr_12rem_auto] sm:items-start">
         <Field label="Email address" error={errors.email}>
           {(props) => (
             <Input
@@ -90,7 +90,8 @@ function InviteForm({ orgId, roles }: { orgId: string; roles: readonly OrgRole[]
             </Select>
           )}
         </Field>
-        <Button type="submit" pending={invite.isPending}>
+        {/* Top margin = label height + gap, so the button lines up with the fields. */}
+        <Button type="submit" pending={invite.isPending} className="sm:mt-5.5">
           Send invitation
         </Button>
       </div>
@@ -146,11 +147,11 @@ function MemberRow({
           {member.twoFactorEnabled && (
             <Badge variant="success" title="Two-step verification is on">
               <ShieldCheck className="size-3" aria-hidden="true" />
-              2-step
+              2-step<span className="sr-only"> verification on</span>
             </Badge>
           )}
         </p>
-        <p className="truncate text-sm text-muted-foreground">{member.email}</p>
+        <p className="text-sm wrap-anywhere text-muted-foreground">{member.email}</p>
         {error && (
           <p className="mt-1 text-sm font-medium text-destructive">{errorMessage(error)}</p>
         )}
@@ -225,13 +226,15 @@ function PendingInvitations({
             className="grid gap-2 py-4 sm:grid-cols-[1fr_auto] sm:items-center"
           >
             <div className="min-w-0">
-              <p className="truncate font-semibold">{invitation.email}</p>
+              <p className="font-semibold wrap-anywhere">{invitation.email}</p>
               <p className="text-sm text-muted-foreground">
                 {ROLE_LABELS[invitation.role]} · expires {formatDate(invitation.expiresAt)}
                 {invitation.invitedBy && ` · invited by ${invitation.invitedBy.name}`}
               </p>
               {resend.isSuccess && resend.variables === invitation.id && (
-                <p className="text-sm text-ok">New link sent.</p>
+                <p role="status" className="text-sm text-ok">
+                  New link sent.
+                </p>
               )}
             </div>
             {manageable && (

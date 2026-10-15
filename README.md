@@ -41,6 +41,7 @@ two-step verification (TOTP) before they can continue, whichever way they sign i
 | Command | What it does |
 |---|---|
 | `pnpm check` | Lint, typecheck and test (also runs before every `git push`) |
+| `pnpm test:e2e` | Accessibility tests of the issuer app against `pnpm dev` (see below) |
 | `pnpm build` | Production build of the web app and server |
 | `pnpm format` | Apply formatting and safe lint fixes |
 | `pnpm db:generate` | Create a SQL migration from changes in `packages/db/src/schema.ts` |
@@ -54,6 +55,38 @@ PostgreSQL: Testcontainers starts `postgres:18-alpine`, so **Docker must be runn
 existing server instead, set `TEST_DATABASE_URL` to a superuser connection string; each test file
 creates and drops its own database there. The integration suite includes a cross-tenant test that
 tries every organization-scoped endpoint against another organization's data.
+
+### Accessibility tests (end to end)
+
+`pnpm test:e2e` drives the issuer app in Chromium with [Playwright](https://playwright.dev) and
+checks every screen with [axe](https://github.com/dequelabs/axe-core) against the WCAG 2.0–2.2
+A and AA rules, in light and dark mode (emulated `prefers-color-scheme`) at 1280 and 375 px wide.
+Any violation fails the test. It also checks keyboard behaviour that broke before: the mobile menu
+takes focus, keeps Tab inside it and returns focus on Escape, its organization switcher is
+labelled, cancelling a confirm button returns focus to it, and step changes move focus to the new
+heading.
+
+It isn't part of `pnpm check` because it needs Docker and the running development stack. Install
+the browser once, then start the stack and run it:
+
+```bash
+pnpm --filter @credforge/e2e exec playwright install chromium
+pnpm infra:up
+pnpm dev           # in another terminal; wait until the server is listening
+pnpm test:e2e
+```
+
+Each run seeds its own accounts without the UI: sign-up and two-step verification through Better
+Auth's API, confirmation and invitation links from Mailpit, a platform admin through the
+`create-platform-admin` CLI, and TOTP codes computed from the secret. The accounts use
+`e2e-<run>-…@example.test` addresses and a password generated for the run, kept in `e2e/.auth/`
+with the saved sessions (git-ignored). At the end the run declines its organization, so it leaves
+the platform approval queue. The test data stays in the development database.
+
+Pass Playwright options after the script, for example `pnpm test:e2e -g "sign in"` or
+`pnpm test:e2e --ui`. A failed test keeps a trace: `pnpm --filter @credforge/e2e exec playwright
+show-report` opens the report. `E2E_BASE_URL` (which must match the server's `PUBLIC_BASE_URL`)
+and `E2E_MAILPIT_URL` point the tests at other addresses.
 
 ## Run the production stack
 
@@ -90,6 +123,7 @@ packages/contracts  Roles, permissions, request schemas and response types share
 packages/db         Database schema and SQL migrations (Drizzle ORM)
 packages/ob3        Credential engine: build, sign, verify, bake and status lists for Open Badges 3.0
 packages/ui         Brand tokens (Tailwind CSS theme)
+e2e/                End-to-end accessibility tests of the issuer app (Playwright + axe)
 docs/               Design plan and other documentation
 branding/           Brand guide, copy kit and logo assets
 ```

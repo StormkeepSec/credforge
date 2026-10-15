@@ -56,7 +56,7 @@ function ProfileCard({ name, email }: { name: string; email: string }) {
             )}
           </Field>
           <Field label="Email" description="Your sign-in address. Changing it isn’t available yet.">
-            {(props) => <Input {...props} value={email} readOnly disabled />}
+            {(props) => <Input {...props} value={email} readOnly />}
           </Field>
           <Button type="submit" pending={save.isPending} className="justify-self-start">
             Save
@@ -394,8 +394,8 @@ export function AccountSettingsPage({ search }: { search: { error?: string } }) 
           required={me.mfa.required}
           hasPassword={hasPassword}
         />
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <ShieldCheck className="size-4" aria-hidden="true" />
+        <p className="flex items-start gap-2 text-sm text-muted-foreground">
+          <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           credforge never stores your Google or Microsoft access tokens; it only checks who signed
           in.
         </p>
