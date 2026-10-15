@@ -1,3 +1,4 @@
+import { createPublicKey } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { SIGNUP_MODES, type SignupMode } from '@credforge/contracts';
@@ -90,6 +91,26 @@ const masterKey = z
     return bytes;
   });
 
+/**
+ * SendGrid's Event Webhook verification key, as shown in its settings: base64 of a DER
+ * (SubjectPublicKeyInfo) ECDSA P-256 public key. A PEM block is accepted too.
+ */
+const sendgridPublicKey = z
+  .string()
+  .trim()
+  .refine((value) => {
+    try {
+      const key = value.includes('BEGIN PUBLIC KEY')
+        ? createPublicKey(value)
+        : createPublicKey({ key: Buffer.from(value, 'base64'), format: 'der', type: 'spki' });
+      return (
+        key.asymmetricKeyType === 'ec' && key.asymmetricKeyDetails?.namedCurve === 'prime256v1'
+      );
+    } catch {
+      return false;
+    }
+  }, 'must be the ECDSA (P-256) verification key from the SendGrid Event Webhook settings');
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -110,12 +131,14 @@ const envSchema = z
     AUTH_SECRET: z.string().min(32, 'must be at least 32 characters').optional(),
     CREDFORGE_MASTER_KEY: masterKey.optional(),
 
-    EMAIL_TRANSPORT: z.enum(['smtp', 'log']).optional(),
+    EMAIL_TRANSPORT: z.enum(['sendgrid', 'smtp', 'log']).optional(),
     SMTP_URL: z
       .string()
       .regex(/^smtps?:\/\//, 'must be an smtp:// or smtps:// URL')
       .optional(),
     EMAIL_FROM: z.string().trim().optional(),
+    SENDGRID_API_KEY: z.string().trim().optional(),
+    SENDGRID_WEBHOOK_PUBLIC_KEY: sendgridPublicKey.optional(),
     DEFAULT_ORG_DAILY_SEND_LIMIT: z.coerce
       .number({ error: 'must be a whole number' })
       .int('must be a whole number')
@@ -166,6 +189,13 @@ const envSchema = z
         code: 'custom',
         path: ['SMTP_URL'],
         message: 'is required for EMAIL_TRANSPORT=smtp',
+      });
+    }
+    if (env.EMAIL_TRANSPORT === 'sendgrid' && !env.SENDGRID_API_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SENDGRID_API_KEY'],
+        message: 'is required for EMAIL_TRANSPORT=sendgrid',
       });
     }
     if (production && env.EMAIL_TRANSPORT && env.EMAIL_TRANSPORT !== 'log' && !env.EMAIL_FROM) {
@@ -271,8 +301,11 @@ export interface Config {
   /** 32 bytes; encrypts issuer private keys (design plan §6.2). */
   masterKey: Buffer;
   email: {
-    transport: 'smtp' | 'log';
+    transport: 'sendgrid' | 'smtp' | 'log';
     smtpUrl?: string;
+    sendgridApiKey?: string;
+    /** Verifies SendGrid's signed Event Webhook (base64 DER public key). Unset: webhook off. */
+    sendgridWebhookPublicKey?: string;
     /** e.g. `credforge <awards@credforge.app>`. */
     from: string;
   };
@@ -361,6 +394,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     email: {
       transport: env.EMAIL_TRANSPORT ?? 'log',
       smtpUrl: env.SMTP_URL,
+      sendgridApiKey: env.SENDGRID_API_KEY,
+      sendgridWebhookPublicKey: env.SENDGRID_WEBHOOK_PUBLIC_KEY,
       from:
         env.EMAIL_FROM ?? `credforge <no-reply@${host === 'localhost' ? 'localhost.test' : host}>`,
     },

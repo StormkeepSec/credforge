@@ -66,7 +66,7 @@ describe('email transports', () => {
           return { messageId: '1' };
         },
       },
-      { info() {} },
+      { info() {}, warn() {}, error() {} },
     );
     await handler(verifyEmailMessage('b@example.org', 'B', 'https://credforge.test/y'));
     expect(sent).toEqual(['b@example.org']);

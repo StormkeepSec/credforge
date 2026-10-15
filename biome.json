@@ -10,7 +10,8 @@
       "!**/*.svg",
       "!packages/ob3/src/vendor",
       "!packages/ob3/test/fixtures",
-      "!packages/ob3/fixtures"
+      "!packages/ob3/fixtures",
+      "!apps/server/test/fixtures"
     ]
   },
   "formatter": {

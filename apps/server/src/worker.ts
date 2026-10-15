@@ -3,6 +3,7 @@ import { pino } from 'pino';
 import { loadConfigOrExit } from './config';
 import { createKeyEncryption } from './crypto/key-encryption';
 import { loadDevEnvFile } from './dev-env';
+import { createDeliveryTracker } from './email/tracking';
 import { createEmailTransport } from './email/transport';
 import { enforceMasterKey, enforcePublicBaseUrl } from './instance';
 import { registerJobs } from './jobs';
@@ -28,7 +29,10 @@ try {
   await enforcePublicBaseUrl(db, config, log);
   await enforceMasterKey(db, createKeyEncryption(config.masterKey), log);
   await boss.start();
-  await registerJobs(boss, log, { emailTransport: createEmailTransport(config, log) });
+  await registerJobs(boss, log, {
+    emailTransport: createEmailTransport(config, log),
+    deliveryTracker: createDeliveryTracker(db),
+  });
 } catch (err) {
   log.fatal({ err }, 'worker failed to start');
   await pool.end();

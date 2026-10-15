@@ -4,13 +4,17 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createDatabase, grantAppRole, migrateDatabase } from '@credforge/db';
 import pg from 'pg';
+import { PgBoss } from 'pg-boss';
 import { inject } from 'vitest';
 import { buildApp } from '../../../src/app';
 import { createAuth } from '../../../src/auth/auth';
 import { loadConfig } from '../../../src/config';
 import { createKeyEncryption } from '../../../src/crypto/key-encryption';
-import { createMemoryOutbox } from '../../../src/email/outbox';
+import { createMemoryOutbox, createQueueOutbox, type EmailOutbox } from '../../../src/email/outbox';
+import type { EmailMessage } from '../../../src/email/transport';
 import { createLocalStorage } from '../../../src/files/storage';
+import { createQueues } from '../../../src/jobs';
+import { createQueueClient } from '../../../src/queue';
 
 const MIGRATIONS_DIR = resolve(import.meta.dirname, '../../../../../packages/db/migrations');
 export const BASE_URL = 'https://credforge.test';
@@ -34,7 +38,10 @@ export type TestEnvironment = Awaited<ReturnType<typeof createTestEnvironment>>;
  * A fresh database (migrated as the owner, used by the app through its restricted role, exactly
  * as in production) and an app built on it, with email captured in memory.
  */
-export async function createTestEnvironment(env: Record<string, string> = {}) {
+export async function createTestEnvironment(
+  env: Record<string, string> = {},
+  options: { queue?: boolean } = {},
+) {
   const serverUrl = inject('databaseUrl');
   const suffix = randomBytes(6).toString('hex');
   const database = `credforge_test_${suffix}`;
@@ -50,7 +57,19 @@ export async function createTestEnvironment(env: Record<string, string> = {}) {
   const appUrl = withCredentials(serverUrl, { user: appRole, password: appPassword, database });
   const owner = createDatabase(ownerUrl, { max: 2 });
   await migrateDatabase(owner.db, MIGRATIONS_DIR);
-  await grantAppRole(owner.pool, { role: appRole, password: appPassword });
+  let boss: PgBoss | undefined;
+  if (options.queue) {
+    // The job queue, installed as the owner like `migrate` does, used through the app role.
+    const installer = new PgBoss({ connectionString: ownerUrl, supervise: false, schedule: false });
+    await installer.start();
+    await createQueues(installer);
+    await installer.stop({ graceful: false });
+  }
+  await grantAppRole(owner.pool, {
+    role: appRole,
+    password: appPassword,
+    extraSchemas: options.queue ? ['pgboss'] : [],
+  });
 
   const config = loadConfig({
     NODE_ENV: 'test',
@@ -64,7 +83,22 @@ export async function createTestEnvironment(env: Record<string, string> = {}) {
     ...env,
   });
   const { db, pool } = createDatabase(appUrl, { max: 5 });
-  const outbox = createMemoryOutbox();
+  const memory = createMemoryOutbox();
+  if (options.queue) {
+    boss = createQueueClient(appUrl, { applicationName: 'credforge-test-queue', worker: false });
+    await boss.start();
+  }
+  // With the queue, messages are enqueued for real and also kept in memory for assertions.
+  const queue = boss ? createQueueOutbox(boss) : undefined;
+  const outbox: EmailOutbox & { messages: EmailMessage[] } = queue
+    ? {
+        messages: memory.messages,
+        async send(message, options) {
+          await queue.send(message, options);
+          memory.messages.push(message);
+        },
+      }
+    : memory;
   const keys = createKeyEncryption(config.masterKey);
   const auth = createAuth({ config, db, outbox, log: silent });
   const storage = createLocalStorage(
@@ -98,8 +132,11 @@ export async function createTestEnvironment(env: Record<string, string> = {}) {
     keys,
     auth,
     storage,
+    /** The job queue client, with `{ queue: true }`. */
+    boss,
     async close() {
       await app.close();
+      await boss?.stop({ graceful: false });
       await pool.end();
       await owner.pool.end();
       const cleanup = new pg.Client({ connectionString: serverUrl });

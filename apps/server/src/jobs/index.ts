@@ -1,6 +1,7 @@
 import type { PgBoss } from 'pg-boss';
 import type { Logger } from 'pino';
 import { EMAIL_QUEUE_OPTIONS, EMAIL_WORK_OPTIONS, emailJobHandler } from '../email/outbox';
+import type { DeliveryTracker } from '../email/tracking';
 import type { EmailMessage, EmailTransport } from '../email/transport';
 import { QUEUES } from './queues';
 
@@ -17,12 +18,14 @@ export async function createQueues(boss: PgBoss): Promise<void> {
 
 export interface JobDependencies {
   emailTransport: EmailTransport;
+  /** Updates award emails' delivery status (`email_message`). */
+  deliveryTracker?: DeliveryTracker;
 }
 
 export async function registerJobs(
   boss: PgBoss,
   log: Logger,
-  { emailTransport }: JobDependencies,
+  { emailTransport, deliveryTracker }: JobDependencies,
 ): Promise<void> {
   await createQueues(boss);
   await boss.schedule(QUEUES.heartbeat, '*/5 * * * *');
@@ -30,8 +33,8 @@ export async function registerJobs(
     log.debug({ jobId: job?.id }, 'heartbeat');
   });
 
-  const sendEmail = emailJobHandler(emailTransport, log);
+  const sendEmail = emailJobHandler(emailTransport, log, deliveryTracker);
   await boss.work<EmailMessage>(QUEUES.email, EMAIL_WORK_OPTIONS, async (jobs) => {
-    for (const job of jobs) await sendEmail(job.data);
+    for (const job of jobs) await sendEmail(job.data, job);
   });
 }

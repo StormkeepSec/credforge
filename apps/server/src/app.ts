@@ -8,6 +8,7 @@ import Fastify, {
 import { apiV1 } from './api/v1';
 import { authRoutes } from './auth/routes';
 import type { Config } from './config';
+import { sendgridWebhookRoutes } from './email/webhook-routes';
 import { loggerOptions } from './logger';
 import { resolvePublicAssets } from './public/assets';
 import { publicCredentialRoutes } from './public/credential-routes';
@@ -92,6 +93,7 @@ export async function buildApp({
     await app.register(publicIssuerRoutes, { services, assets });
     await app.register(publicImageRoutes, { services });
     await app.register(publicCredentialRoutes, { services, assets });
+    await app.register(sendgridWebhookRoutes, { services });
   }
   await app.register(webApp, { webDistDir: config.webDistDir });
   app.setNotFoundHandler(createNotFoundHandler({ config, assets }));

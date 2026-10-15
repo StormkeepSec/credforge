@@ -2,7 +2,8 @@ import type { Queryable } from '@credforge/db';
 import type { PgBoss, Db as QueueDatabase } from 'pg-boss';
 import type { Logger } from 'pino';
 import { QUEUES } from '../jobs/queues';
-import type { EmailMessage, EmailTransport } from './transport';
+import type { DeliveryTracker } from './tracking';
+import { type EmailMessage, type EmailTransport, PermanentEmailError } from './transport';
 
 /**
  * Where the app puts email to be sent. The app never talks to the email provider itself: it
@@ -77,10 +78,53 @@ export function createMemoryOutbox(): EmailOutbox & { messages: EmailMessage[] }
   };
 }
 
-/** The worker's handler for the email queue. Throwing makes pg-boss retry the job. */
-export function emailJobHandler(transport: EmailTransport, log: Pick<Logger, 'info'>) {
-  return async (message: EmailMessage) => {
-    const { messageId } = await transport.send(message);
+/**
+ * The worker's handler for the email queue. Throwing makes pg-boss retry the job.
+ *
+ * Tracked messages (award emails) are checked before sending: one that was already sent, or whose
+ * org has since been suspended, isn't sent. After a successful send nothing may throw, or the
+ * retry would send the email a second time.
+ */
+export function emailJobHandler(
+  transport: EmailTransport,
+  log: Pick<Logger, 'info' | 'warn' | 'error'>,
+  tracker?: DeliveryTracker,
+) {
+  return async (message: EmailMessage, attempt: { retryCount: number } = { retryCount: 0 }) => {
+    const id = message.trackingId;
+    if (id && tracker) {
+      const check = await tracker.beforeSend(id);
+      if (!check.send) {
+        log.info({ kind: message.kind, emailId: id, reason: check.reason }, 'email not sent');
+        return;
+      }
+    }
+
+    let messageId: string | undefined;
+    try {
+      ({ messageId } = await transport.send(message));
+    } catch (error) {
+      const permanent = error instanceof PermanentEmailError;
+      const final = permanent || attempt.retryCount >= EMAIL_QUEUE_OPTIONS.retryLimit;
+      if (id && tracker) {
+        await tracker
+          .failed(id, (error as Error).message, final)
+          .catch((err) => log.error({ err, emailId: id }, 'could not record a failed send'));
+      }
+      if (permanent) {
+        log.warn({ kind: message.kind, emailId: id, err: error }, 'email refused, not retrying');
+        return;
+      }
+      throw error;
+    }
+
+    if (id && tracker) {
+      await tracker
+        .sent(id, transport.name, messageId ?? null)
+        .catch((err) =>
+          log.error({ err, emailId: id }, 'email sent, but its status was not saved'),
+        );
+    }
     log.info({ kind: message.kind, transport: transport.name, messageId }, 'email sent');
   };
 }

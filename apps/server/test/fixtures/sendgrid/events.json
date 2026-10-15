@@ -1,0 +1,36 @@
+[
+  {
+    "email": "jordan@example.org",
+    "timestamp": 1792209845,
+    "smtp-id": "<14c5d75ce93.dfd.64b469@ismtpd-555>",
+    "event": "processed",
+    "category": ["award"],
+    "sg_event_id": "rbtnWrG1DVDGGGFHFyun0A==",
+    "sg_message_id": "14c5d75ce93.dfd.64b469.filter0001.16648.5515E0B88.0",
+    "credforge_email_id": "8f0c2d4e-6b1a-4c3d-9e2f-1a2b3c4d5e6f"
+  },
+  {
+    "email": "jordan@example.org",
+    "timestamp": 1792209848,
+    "smtp-id": "<14c5d75ce93.dfd.64b469@ismtpd-555>",
+    "event": "delivered",
+    "category": ["award"],
+    "sg_event_id": "rWVYmVk90MjZJ9iohOBa3w==",
+    "sg_message_id": "14c5d75ce93.dfd.64b469.filter0001.16648.5515E0B88.0",
+    "response": "250 OK",
+    "credforge_email_id": "8f0c2d4e-6b1a-4c3d-9e2f-1a2b3c4d5e6f"
+  },
+  {
+    "email": "nobody@example.org",
+    "timestamp": 1792209850,
+    "smtp-id": "<14c5d75ce94.dfd.64b469@ismtpd-555>",
+    "event": "bounce",
+    "type": "bounce",
+    "category": ["award"],
+    "sg_event_id": "6g4ZI7SA-xmRDv57GoPIPw==",
+    "sg_message_id": "14c5d75ce94.dfd.64b469.filter0001.16648.5515E0B89.0",
+    "reason": "550 5.1.1 The email account that you tried to reach does not exist.",
+    "status": "5.1.1",
+    "credforge_email_id": "0d9e8f7a-1b2c-4d3e-8f4a-5b6c7d8e9f01"
+  }
+]

@@ -1,0 +1,6 @@
+{
+  "note": "A fixed test vector: the public key (base64 DER, as SendGrid shows it), the timestamp header and the signature header over events.json exactly as stored. The private key was thrown away.",
+  "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEBSg5bvUa7s0T+Pqs40Im+BbmskMwv+coXSyZD/oD8wM8zqfXqGljF/GIwZ55kUy/9VQCDX5SZOOBeMxRDyAU0Q==",
+  "timestamp": "1792209851",
+  "signature": "MEUCIEvF8OxSG5003h9BvNd9JhOgEG7meRvYw5X4QuEgU8iUAiEAmu/aMkjOHqBdD1QLCttXhxfweu7vIKJO/HzcC31uHkk="
+}

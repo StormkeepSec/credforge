@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import type { Logger } from 'pino';
 import { type Config, type Mailbox, parseMailbox } from '../config';
+import { createSendGridTransport } from './sendgrid';
 
 /** A rendered email, ready to send. */
 export interface EmailMessage {
@@ -25,6 +26,17 @@ export interface EmailTransport {
   send(message: EmailMessage): Promise<{ messageId?: string }>;
 }
 
+/**
+ * The provider refused this message for good (for example SendGrid's 400 for an invalid
+ * recipient). The worker records the failure and doesn't retry.
+ */
+export class PermanentEmailError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermanentEmailError';
+  }
+}
+
 /** A display name that can't break out of the From header. */
 export function safeDisplayName(name: string): string {
   return name
@@ -42,9 +54,10 @@ export function senderOf(from: Mailbox, message: Pick<EmailMessage, 'fromName'>)
 }
 
 /**
- * Builds the transport named by EMAIL_TRANSPORT. `smtp` sends through any SMTP server (Mailpit
- * in development); `log` prints messages to the log instead of sending them, for development
- * only, since it prints the links in them.
+ * Builds the transport named by EMAIL_TRANSPORT. `sendgrid` uses SendGrid's v3 Web API over
+ * HTTPS (credforge.app: DigitalOcean blocks outbound SMTP); `smtp` sends through any SMTP server
+ * (Mailpit in development); `log` prints messages to the log instead of sending them, for
+ * development only, since it prints the links in them.
  */
 export function createEmailTransport(
   config: Pick<Config, 'email'>,
@@ -64,6 +77,11 @@ export function createEmailTransport(
         return {};
       },
     };
+  }
+
+  if (config.email.transport === 'sendgrid') {
+    if (!config.email.sendgridApiKey) throw new Error('SENDGRID_API_KEY is not set.');
+    return createSendGridTransport({ apiKey: config.email.sendgridApiKey, from });
   }
 
   const smtp = nodemailer.createTransport(config.email.smtpUrl);
