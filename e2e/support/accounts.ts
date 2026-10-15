@@ -34,6 +34,25 @@ export interface Account {
 }
 
 /** Creates an account and confirms its email from the Mailpit link, which signs it in. */
+/** Uploads a file as the raw request body, as the issuer app does for images. */
+export async function put<T = unknown>(
+  request: APIRequestContext,
+  path: string,
+  body: Buffer,
+  contentType: string,
+): Promise<T> {
+  const response = await ok(
+    await request.put(path, { data: body, headers: { ...headers, 'content-type': contentType } }),
+    `PUT ${path}`,
+  );
+  return (await response.json()) as T;
+}
+
+/** Simple badge artwork for the seeded achievement and logo. */
+export const BADGE_SVG = Buffer.from(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><circle cx="100" cy="100" r="92" fill="#111827"/><path d="M100 34 158 72 140 156H60L42 72Z" fill="#379392"/><circle cx="100" cy="104" r="22" fill="#fafafa"/></svg>`,
+);
+
 export async function signUpAndConfirm(request: APIRequestContext, account: Account) {
   await post(request, '/api/auth/sign-up/email', { ...account, callbackURL: '/verify-email' });
   const link = await mailLink(account.email, LINKS.verifyEmail);

@@ -248,6 +248,12 @@ Steps:
 4. Record the result in docs/design-plan.md (§17, M1), then take the sample offline (stop the
    tunnel and `serve-sample`, or remove the nginx location).
 
+The validator's "Uri to Resource" field also takes a URL, so credentials issued by a running
+credforge instance need no files: give it the credential's URL, then `{credential URL}/badge.png`
+and `{credential URL}/badge.svg`. For a local check, start the production stack with
+`PUBLIC_BASE_URL` set to a quick tunnel's address and a fresh database (the base URL is recorded on
+first start), as was done for M3 (design plan §17).
+
 ## Using it from the server
 
 The server bundles `@credforge/ob3` with tsup, and npm dependencies stay external. When the server

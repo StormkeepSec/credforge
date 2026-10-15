@@ -1,10 +1,12 @@
 import { type APIRequestContext, expect, test as setup } from '@playwright/test';
 import {
   type Account,
+  BADGE_SVG,
   enableTwoFactor,
   makePlatformAdmin,
   me,
   post,
+  put,
   signUpAndConfirm,
 } from '../support/accounts';
 import {
@@ -65,11 +67,39 @@ setup('seed accounts, an organization and invitations', async ({ playwright }) =
       const org = await post<{ id: string }>(request, '/api/v1/orgs', { name: orgName });
       // Owners must turn on two-step verification before anything else (REQUIRE_MFA_FOR_ADMINS).
       const totpSecret = await enableTwoFactor(request, password);
-      await post(request, `/api/v1/orgs/${org.id}/issuers`, {
+      const issuer = await post<{ id: string }>(request, `/api/v1/orgs/${org.id}/issuers`, {
         name: orgName,
         url: 'https://example.org',
         email: 'badges@example.org',
         description: 'Seeded by the end-to-end tests.',
+      });
+      await put(
+        request,
+        `/api/v1/orgs/${org.id}/issuers/${issuer.id}/logo`,
+        BADGE_SVG,
+        'image/svg+xml',
+      );
+      // A published achievement, awarded once to the owner (a pending org may award to members).
+      const achievement = await post<{ id: string; name: string }>(
+        request,
+        `/api/v1/orgs/${org.id}/achievements`,
+        {
+          name: `E2E Network Defense ${runId}`,
+          description: 'Recognizes foundational skills in defending small networks.',
+          criteriaNarrative: 'Completed all six labs.',
+          tags: ['networking', 'security'],
+        },
+      );
+      await put(
+        request,
+        `/api/v1/orgs/${org.id}/achievements/${achievement.id}/image`,
+        BADGE_SVG,
+        'image/svg+xml',
+      );
+      await post(request, `/api/v1/orgs/${org.id}/achievements/${achievement.id}/publish`);
+      const credential = await post<{ id: string }>(request, `/api/v1/orgs/${org.id}/credentials`, {
+        achievementId: achievement.id,
+        recipient: { name: owner.name, email: owner.email },
       });
       await post(request, `/api/v1/orgs/${org.id}/invitations`, {
         email: invitee.email,
@@ -80,7 +110,7 @@ setup('seed accounts, an organization and invitations', async ({ playwright }) =
         role: 'viewer',
       });
       expect((await me(request)).mfa.state).toBe('ok');
-      return { org, totpSecret };
+      return { org, totpSecret, achievement, credentialId: credential.id };
     }),
     seed(SIGNED_IN.admin, async (request) => {
       await signUpAndConfirm(request, admin);
@@ -101,5 +131,7 @@ setup('seed accounts, an organization and invitations', async ({ playwright }) =
     invitee: { email: invitee.email },
     inviteToken: inviteLink.slice(inviteLink.indexOf(LINKS.invitation) + LINKS.invitation.length),
     pendingInviteEmail,
+    achievement: { id: ownerResult.achievement.id, name: ownerResult.achievement.name },
+    credentialId: ownerResult.credentialId,
   });
 });

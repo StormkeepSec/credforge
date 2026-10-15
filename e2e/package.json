@@ -11,6 +11,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
+    "@credforge/ob3": "workspace:*",
     "@playwright/test": "1.64.0",
     "@types/node": "^24.19.2",
     "typescript": "~6.0.3"

@@ -1,6 +1,6 @@
 # credforge: Design Plan
 
-**Status:** v0.4. M0, M1 and M2 are done. M1's sample credentials passed the 1EdTech validator on 2026-10-14 (§17). Findings and decisions from M1 and M2 that changed the plan are folded into §2, §4, §5.1, §6, §7, §9, §10, §12, §13, §15, §16, §17 and the decision log (§18).
+**Status:** v0.5. M0, M1, M2 and M3 are done. M1's sample credentials passed the 1EdTech validator on 2026-10-14, and a credential issued by the running app (M3) passed it on 2026-10-15 (§17). Findings and decisions from M1–M3 that changed the plan are folded into §5, §6, §7, §8, §9, §10, §11, §12, §13, §15, §17 and the decision log (§18).
 **Date:** 2026-10-15
 **Inputs:** `openbadges_platform_project_requirements.md` (first attempt), `branding/` (brand guide, copy kit, logo assets), and the 1EdTech Open Badges 3.0 spec (Final Release, document v1.4.5, June 29, 2026).
 
@@ -274,6 +274,18 @@ Details settled in M1 (the full signed example is `packages/ob3/test/fixtures/go
 - **Images referenced by any issued credential are never deleted.** The code enforces this.
 - **Baked badges are created on request, not stored.** Baking only inserts a text chunk into the PNG (no re-encoding), so it's fast. Storing a baked copy per credential would multiply storage for every 10,000-row batch. Responses are cached.
 
+**As built in M3** (`apps/server/src/files/`):
+
+- **File types by their bytes.** PNG, JPEG and WebP by their signatures; SVG when, after an optional BOM, XML declaration, comments and doctype, the first element is `<svg>`. The declared content type and the file name are ignored. GIF, PDF, HTML and everything else are refused (415). Over 2 MB is refused before decoding (413), and so is a canvas over 40 million pixels.
+- **Raster images** are decoded with `sharp`, EXIF-rotated, scaled to fit 2048 px and re-encoded as PNG, which drops all metadata. JPEG and WebP become PNG.
+- **SVG sanitizing** parses the file as XML (`@xmldom/xmldom`) and rebuilds it from an allowlist of static drawing elements and presentation attributes. Removed: scripts, event handlers, `foreignObject`, animation (`animate`/`set` can rewrite links), links (`<a>` keeps its drawing as a `<g>`), metadata, editor namespaces, processing instructions, `xml:base`. References must stay inside the file: `href` only `#id`, `url()` only `#id`, CSS without `@import`, escapes or external URLs, and embedded rasters only as PNG/JPEG/GIF/WebP data URIs. A DTD with entity definitions is refused outright; a plain doctype is dropped. The sanitized SVG must render (librsvg via sharp) and have a viewBox or a size.
+- **Variants:** 512 and 128 px PNGs (the image centered on transparency; SVGs are rasterized at the density that keeps them sharp at that size), and for badges the 1200×630 Open Graph card. **The card has no text** (decision 15): the badge sits on a light canvas between the brand's angled ink, teal and violet bars.
+- **Content addresses:** the URL holds the full hex SHA-256 of the cleaned original. The same image uploaded again for the same achievement reuses its record.
+- **Served** by the app with `Cache-Control: public, max-age=31536000, immutable`, an `ETag`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`, `Cross-Origin-Resource-Policy: cross-origin` (other sites may show badges) and CORS `*`.
+- **Retention:** the files an issued credential refers to (its badge image and the issuer's logo at the time) are marked `retain` in the award's transaction and are never deleted. Deleting a draft achievement or replacing a logo deletes only files nothing retains.
+- **Baking on request:** `badge.png` bakes into the cleaned PNG original, or into the 512 px PNG when the artwork is SVG; `badge.svg` exists only for SVG artwork. Both are cached for 5 minutes (not at all once the recipient has hidden the page).
+- **Issuer logos** use the same pipeline (original, 512 and 128 px; no Open Graph card) and arrived with M3 (decision 13).
+
 ---
 
 ## 6. Identity, keys and trust
@@ -336,11 +348,13 @@ Details settled in M1 (the full signed example is `packages/ob3/test/fixtures/go
 
 - **Issuer domain verification.** The issuer proves it controls its website domain with a DNS TXT record (`_credforge.example.org TXT "credforge-verify=…"`) or a file at `/.well-known/credforge-verify.txt`. Public pages then show "Website verified: example.org". Unverified issuers show their website as *self-reported*. The wording stays precise, per the brand guardrails.
 - **Approval gate** (`SIGNUP_MODE=approval`, the credforge.app setting). A new org starts as `pending`. It can complete its issuer profile, create achievements and **test-award to its own members' verified email addresses**, so it still gets to its first badge quickly. Awarding to anyone else waits until a platform admin approves the org. The admin gets a queue of pending orgs showing name, website, domain-verification status and requester; the org is emailed when it is approved or declined. Self-hosters usually choose `open` or `invite`.
+  - **Built in M3:** the test-award rule. While the org is `pending`, an award (and its email) must go to the confirmed address of one of the org's members, otherwise `403 recipient_not_allowed`. Approved orgs award to anyone.
   - **Built in M2:** the statuses and transitions (approve: pending/declined → active; decline: pending → declined; suspend: pending/active → suspended; reinstate: suspended → active, or pending if it was never approved), the queue on the **Platform** screen, emails to the owners on approve, decline and suspend, and an email to every platform admin when an org is created. Suspended and declined orgs are read-only (`org_inactive`). The test-award rule itself is enforced with awarding in M3.
   - One person can have at most 3 orgs waiting for approval. An org a platform admin creates is active at once.
   - `open`: new orgs are active at once. `invite`: an account can only be created for an address with a pending invitation, and only platform admins create orgs. A refused sign-up gets the same answer as a normal one (Better Auth's protection against account enumeration), so the sign-up screen says up front that the site is invite-only.
   - The first platform admin comes from the CLI: `node dist/cli.js create-platform-admin --email …` promotes an existing account, or creates one (email marked verified) and prints a one-time link to set its password.
 - **Daily send cap.** A per-org daily cap (`DEFAULT_ORG_DAILY_SEND_LIMIT`) is a second guard even after approval, in case an account is compromised. Platform admins can raise it per org.
+  - **Built in M3:** award emails (first sends and resends) queued by the org in the last 24 hours (rolling, not per calendar day) are counted under a lock on the org row, so parallel awards can't overshoot. Over the limit the award fails with `429 send_limit_reached`; an award without email isn't counted. The default is 1,000; `organization.daily_send_limit` overrides it per org (null: the default, 0: no limit), set on the Platform screen (decision 21). Suspending an org also stops award emails still in the queue: the worker marks them failed.
 - **Suspension.** A platform admin can suspend an org, which stops all issuing and emailing. Existing credentials stay verifiable unless they are revoked for abuse.
 - **Report abuse.** Every public credential page has a "Report a problem" link.
 - **No spoofing in email.** Award emails are sent from the credforge domain, with the display name "Example Academy via credforge" and `Reply-To` set to the issuer's contact address. They never pretend to come from the issuer's domain (DMARC).
@@ -441,6 +455,15 @@ erDiagram
 
 As built in M2: every org-scoped endpoint lives under `/api/v1/orgs/{orgId}/…`. Before any handler runs, the caller's membership of that org is loaded; a non-member gets the same 404 as for an org that doesn't exist, and every query filters on the org id as well as the resource id. The cross-tenant suite (`apps/server/test/integration/cross-tenant.test.ts`) takes the route list from the app itself and fails if an org-scoped route has no case. It tries each route with another org's id, and with the caller's own org id plus another org's resource ids, then checks the other org's rows are unchanged.
 
+**As built in M3** (migration `0003_achievements_credentials`):
+
+- `achievement` holds the current revision; every saved change to a signed field (name, description, criteria, type, image, tags, alignments, default validity) bumps `revision` and adds an `achievement_revision` row with the snapshot. Credentials record `achievement_revision` and embed that version. Status: `draft` (not awardable, page not public, can be deleted) → `active` (needs an image) ↔ `archived` (not awardable; its page stays up).
+- `file` adds `subject_id` (the achievement or issuer an image belongs to), unique per kind, subject and SHA-256.
+- `credential` as listed, plus `image_file_id` (the badge image it was issued with, for baking), `claim_token_expires_at` and `issued_by_type`/`issued_by_id`. Its `id` is generated before signing, since it is the credential's URL.
+- `status_list` keeps two bitstrings as `bytea`: `allocated` (indexes handed out) and `statuses` (the published bits), plus the signed `document` for `version`. Lists are numbered per issuer (`/status/{issuerId}/1`, `/2`, …); the first is created and signed at the issuer's first award.
+- `email_message` statuses are `queued`, `sent`, `delivered`, `bounced`, `dropped`, `spam_reported` and `failed`, with the provider's events kept for the timeline (`events`, at most 50). "Opened" is the credential's `accepted_at`, not an email status.
+- **Not built yet:** `email_template` (issuer-editable email text; the award email uses credforge's own wording for now), `issuance_batch` (M4), `api_key` (M5), the issuer's accent color.
+
 **Database roles:** `migrate` runs as the database owner (`MIGRATION_DATABASE_URL`) and creates or updates the app's role from `DATABASE_URL`: DML on the app's tables (SELECT and INSERT only on `audit_event`) and on the job queue's tables, no DDL, owns nothing. The app and worker run their job queue clients with `migrate: false`. If both URLs use the same user, migrate logs a warning and the triggers still keep the audit log append-only.
 
 ---
@@ -460,6 +483,17 @@ On credforge.app the org is *pending* during all of this. A banner explains that
 Choose an achievement → enter the recipient's name and email (optional: evidence, issue date, expiry) → **preview** the badge page and the email → **Award**.
 On the server, one transaction validates the input, allocates a status-list index, builds the credential, signs it, self-verifies it, inserts it, writes the audit event, and enqueues the email and image-baking jobs. Signing a single credential takes milliseconds, so it happens synchronously.
 
+**As built in M3** (`apps/server/src/credentials/service.ts`, `POST /api/v1/orgs/{orgId}/credentials`), in one transaction:
+
+1. Lock the org row; refuse suspended and declined orgs.
+2. Check the achievement is `active`, a pending org's recipient is a member with that confirmed address (§6.3), and the daily send cap (§6.3).
+3. Lock the issuer row (this serializes status-list allocation per issuer); load its active key and decrypt it.
+4. Allocate a random free index in the issuer's current revocation list, creating and signing list 1 (or the next one, when full) if needed.
+5. Build the credential (the issuer, logo and achievement as they are now; the recipient's salted email hash and name; `validFrom` from the award date, `validUntil` from the form or the achievement's default validity; evidence; the status entry), sign it, and self-check it against the schema and the issuer profile as published (`issueCredential` in `packages/ob3`).
+6. Insert the credential with the SHA-256 of a new claim token, mark its images retained, write `credential.issued` to the audit log, insert the `email_message` row and enqueue the email job **in the same transaction** (pg-boss writes through the transaction's connection; decision 19).
+
+There are no image-baking jobs: baking happens on request (§5.4). A calendar date as the award date means "earned that day" (midnight UTC, or now for today in a time zone ahead of UTC); a future date is refused. The issuer app previews the recipient's page and the email (`POST …/credentials/preview`, which signs nothing).
+
 ### 8.3 Award many (CSV)
 
 Upload a CSV (MVP limit: 10,000 rows / 5 MB, with a downloadable template) → map columns (auto-detected) → **validation report** (invalid emails, duplicates within the file, people who already hold this achievement) → confirm → the batch job runs in chunks and is idempotent per row → live progress → results CSV (each row gets a credential URL or an error).
@@ -476,6 +510,17 @@ Upload a CSV (MVP limit: 10,000 rows / 5 MB, with a downloadable template) → m
   - **Click tracking and open tracking are turned off** on award emails, so claim tokens never pass through SendGrid's redirect domain. "Opened" is recorded when the recipient first visits the claim link, a first-party signal that is more accurate than a tracking pixel.
   - Delivered, bounce, dropped and spam-report statuses arrive through SendGrid's **signed Event Webhook** at `/api/webhooks/sendgrid`. The app checks the ECDSA signature before trusting an event.
   - Hard bounces are flagged on the credential so the issuer can fix the address and reissue.
+
+**As built in M3:**
+
+- **The claim link is traded for a cookie.** Opening `/credentials/{id}?t={token}` with a valid token sets an HttpOnly, SameSite=Lax cookie scoped to `/credentials/{id}` (Secure on HTTPS, expiring with the token) and redirects to the clean URL (decision 17). The token doesn't stay in the address bar, so a recipient who copies the address to share their badge doesn't share their token. An unknown or expired token leads to the page with a "this link no longer works" notice.
+- **Accepted / opened** is recorded the first time a valid token is used (`credential.accepted_at`; audit `credential.claimed`, actor: the recipient). Mail scanners that open links can set it early: it is a first-party signal, not proof of reading.
+- **Recipient actions** with the cookie: Add to LinkedIn, and hide or show the page (a plain form post, checked for this site's origin; audit `credential.hidden` / `credential.shown`). Downloads are open to anyone who can see the page (decision 20). A hidden credential answers 404, in HTML, JSON and every download, to everyone but its recipient.
+- **Resend** (`POST …/credentials/{id}/resend`) makes a new token and a new 90 days; only the newest token works. It counts against the daily send cap.
+- **The email** comes from `EMAIL_FROM`'s address as "{issuer} via credforge", Reply-To the issuer's contact address, with the 512 px badge image, the link and the date it stops working.
+- **Delivery tracking:** the email job carries the `email_message` id. The worker skips a message that was already sent (a job picked up again after a crash) and doesn't send for a suspended org; after a successful send nothing may throw, so a retry can't send twice. SendGrid's 400 and 413 answers are final (no retry); other failures retry with backoff for about an hour, then the message is `failed`. The worker keeps polling as before: four pollers every 0.5 s, one job per fetch.
+- **SendGrid:** v3 Mail Send with click, open, subscription and Google Analytics tracking off on every message (verification and password-reset links carry tokens too), the `email_message` id as a custom argument and the kind as a category. The Event Webhook checks the ECDSA P-256 signature over the timestamp header plus the raw body before parsing anything. Events match by the custom argument (or SendGrid's message id), each event applies once (`sg_event_id`), and statuses only move forward (a late "delivered" never hides a bounce). Bounces, drops and spam reports go to the audit log. Opens and clicks are ignored.
+- **The issuer sees** each award's timeline: awarded → emailed → delivered or bounced → opened, with the provider's reason for a bounce.
 
 ### 8.5 Verify
 
@@ -507,17 +552,18 @@ Upload a CSV (MVP limit: 10,000 rows / 5 MB, with a downloadable template) → m
 | `/login`, `/signup`, `/forgot-password`, `/reset-password`, `/verify-email`, `/two-factor`, `/invite/:token` | Auth screens (issuer app) | `/verify-email` is where confirmation links land; `/two-factor` is the code step after a password or the step-up after Google/Microsoft |
 | `/app/*` | Issuer admin SPA | |
 | `/issuers/:id` | Issuer page (HTML) or Profile (JSON) | **Permanent**, embedded in credentials. Browsers get HTML; `application/ld+json`, `application/json`, `*/*` or no `Accept` get the profile JSON (`Vary: Accept`, CORS `*`, 5-minute cache). Pending, suspended and declined orgs show a notice on the HTML page; the JSON is always served so their credentials still verify |
-| `/issuers/:id/images/:hash.png` | Issuer logo | **Permanent**, immutable, served from Spaces through the app |
-| `/achievements/:id` | Achievement page (HTML) or JSON | **Permanent** |
+| `/issuers/:id/images/:hash.{png,svg}` (+ `-512.png`, `-128.png`) | Issuer logo | **Permanent**, immutable, served from Spaces through the app |
+| `/achievements/:id` | Achievement page (HTML) or JSON | **Permanent**. The JSON is the OB `Achievement` (current revision) with its `creator`. Drafts: 404. Archived: "No longer awarded" |
 | `/achievements/:id/images/:hash.{png,svg}` (+ `-512.png`, `-128.png`, `-og.png`) | Badge image and its derived sizes | **Permanent**, immutable, served from Spaces through the app |
-| `/credentials/:id` | Credential page (HTML) or signed VC (JSON) | **Permanent**; `?t=` claim token |
-| `/credentials/:id/badge.png`, `badge.svg`, `credential.json` | Downloads | |
-| `/credentials/:id/certificate` | Printable certificate | |
-| `/status/:issuerId/:listId` | Signed `BitstringStatusListCredential` | Short cache TTL plus an `ETag`. Must be public JSON: the 1EdTech validator fetches and verifies it for every credential with a status entry, about 10 times per check, so rate limits must not block repeated fetches |
+| `/credentials/:id` | Credential page (HTML) or signed VC (JSON) | **Permanent**; `?t=` claim token (traded for a cookie, then a redirect to the clean URL). JSON for no `Accept`, `*/*`, `application/json`, `application/ld+json`, `application/vc+ld+json` or `application/vc`. `noindex`. Hidden by the recipient: 404 |
+| `/credentials/:id/badge.png`, `badge.svg`, `credential.json` | Downloads | Baked on request; `badge.svg` only for SVG artwork |
+| `/credentials/:id/certificate` | Printable certificate | Landscape print layout with a QR code to the page |
+| `/credentials/:id/visibility` | `POST`: the recipient hides or shows the page | Needs the claim cookie and this site's origin |
+| `/status/:issuerId/:listId` | Signed `BitstringStatusListCredential` | `Cache-Control: public, max-age=60` plus an `ETag` (`If-None-Match` → 304), CORS `*`, `application/json` unless asked for `ld+json` or `vc`. Must be public JSON: the 1EdTech validator fetches and verifies it for every credential with a status entry, about 10 times per check, so rate limits must not block repeated fetches |
 | `/verify` | Verification tool | |
 | `/api/v1/*` | REST API | |
 | `/api/auth/*` | Better Auth endpoints, including the Google/Microsoft callbacks (`/api/auth/callback/{provider}`) | |
-| `/api/webhooks/sendgrid` | SendGrid Event Webhook | Signature-verified, rate-limited |
+| `/api/webhooks/sendgrid` | SendGrid Event Webhook | Signature-verified (ECDSA, raw body); exists only when `SENDGRID_WEBHOOK_PUBLIC_KEY` is set. Rate limits arrive with M5 |
 | `/api/docs` | Interactive OpenAPI docs | |
 | `/healthz`, `/readyz` | Health checks | |
 
@@ -550,6 +596,17 @@ Upload a CSV (MVP limit: 10,000 rows / 5 MB, with a downloadable template) → m
 | Issuers | `GET/POST /orgs/{orgId}/issuers` · `GET/PATCH /orgs/{orgId}/issuers/{issuerId}` |
 | Audit | `GET /orgs/{orgId}/audit-events?before=&limit=` |
 | Platform | `GET /platform/orgs?status=` · `POST /platform/orgs/{orgId}/approve` · `/decline` · `/suspend` · `/reinstate` |
+
+**Built in M3:**
+
+| Area | Endpoints |
+|---|---|
+| Achievements | `GET/POST /orgs/{orgId}/achievements?status=` · `GET/PATCH/DELETE …/achievements/{id}` (delete: drafts only) · `PUT …/{id}/image` · `POST …/{id}/publish` · `/archive` · `/restore` · `GET …/{id}/revisions` |
+| Credentials | `GET /orgs/{orgId}/credentials?before=&limit=&achievementId=` (newest first, cursor) · `POST …/credentials` (award one) · `POST …/credentials/preview` · `GET …/credentials/{id}` (with its emails) · `POST …/credentials/{id}/resend` |
+| Issuer logo | `PUT/DELETE /orgs/{orgId}/issuers/{id}/logo` |
+| Platform | `PATCH /platform/orgs/{orgId}/limits` (`dailySendLimit`) |
+
+Uploads (`PUT …/image`, `PUT …/logo`) send the file itself as the request body with its content type; there is no multipart parsing. New problem codes: `file_too_large` (413), `unsupported_file` (415 or 400), `issuer_not_ready`, `achievement_not_active`, `recipient_not_allowed` (pending org), `send_limit_reached` (429). The cross-tenant suite covers every new org-scoped route, and also checks that an award or a preview naming another org's achievement fails.
 
 Errors are `application/problem+json` with a machine-readable `code` (`mfa_required`, `org_inactive`, `last_owner`, …). Request bodies are validated with the Zod schemas in `packages/contracts`, which the issuer app also uses for its forms. The generated OpenAPI document arrives in M5.
 
@@ -595,6 +652,8 @@ Errors are `application/problem+json` with a machine-readable `code` (`mfa_requi
 - **Voice:** the UI says **Create** and **Award** (the brand's verbs), while the API and code use the spec term `issue`. No hype, no overclaiming.
 - **Accessibility target:** WCAG 2.2 AA, checked automatically with axe in end-to-end tests (`e2e/`, `pnpm test:e2e`: every issuer-app screen in light and dark at 1280 and 375 px, plus keyboard checks). Light and dark themes in the admin.
 - **As built in M2:** the issuer app's semantic colors (shadcn/ui names such as `primary`, `muted`, `destructive`) are defined in `apps/web/src/styles/app.css` from the brand tokens, with a dark theme that follows the operating system. There are **no modal dialogs**: Radix's modal scroll lock injects inline styles, which the strict CSP (`style-src 'self'`) blocks. Confirmations happen in place and selects are native `<select>`s. The production build was checked for CSP violations.
+- **As built in M3:** the sidebar gains **Achievements** (a grid of badge cards), **Award a badge** and **Awarded badges**. The achievement editor and the award form show a live preview of the recipient's page beside the form (in the public pages' light colors, also in dark mode); the award form also previews the email. "Award it to myself" fills in the signed-in person's name and address: the quickest first badge in a pending org. Awarded badges lists each award's delivery status; a badge's page shows the delivery timeline and **Send the link again**. Repeating groups (alignments, evidence) are fieldsets whose legends are floated so they lay out as the first row. The issuer profile gains a **Logo** card. The overview checklist's last two steps are live: create and publish an achievement, award it to yourself.
+- **Public pages (M3):** the credential page leads with the badge, then "{achievement}, awarded to {name} by {issuer logo and name}", the status pill (Valid, Expired, Revoked, Not valid yet), downloads, the achievement's description and criteria, skills, alignments, evidence, the **verification panel** (format, signature, revocation and dates, each with its outcome; checked on the server with `packages/ob3` and cached for a minute) and details. Criteria Markdown is shown as plain text for now. The "Report a problem" link (§6.3) arrives with the abuse controls in M5.
 - **Accessibility review (M2):** every issuer-app screen was checked with axe-core 4.10 (WCAG 2.2 A/AA rules) in light and dark mode and at 375px, and by keyboard. Results that set rules for later screens: control borders (`--input`) keep 3:1 against cards and placeholders (`--placeholder`) 4.5:1; read-only data uses `readOnly` on a muted fill, not `disabled`; each screen sets the tab title from its heading; when a screen swaps in its next step, focus moves to the new heading; and the mobile menu moves focus into the panel, closes on Escape and makes the page behind it `inert` (not a modal dialog component, for the CSP reason above). Confirm-in-place buttons hand focus back when cancelled.
 
 ---
@@ -615,9 +674,9 @@ Errors are `application/problem+json` with a machine-readable `code` (`mfa_requi
 | Stored files | Spaces buckets fully private (no public objects or listing); per-bucket limited access keys; exports downloaded through the app after a permission check; images referenced by credentials never deleted; bucket versioning on (§13.5) |
 | CSV | Streaming parser and row limits; formula-injection escaping on export |
 | Email | No raw HTML from issuers (a limited Markdown subset, escaped); provider API or nodemailer (no header injection); SendGrid click/open tracking off, so tokens never pass through third-party redirects; webhook signatures verified |
-| HTTP | Strict nonce-based CSP on SSR pages, `Referrer-Policy`, `frame-ancestors 'none'`; HSTS set at nginx |
+| HTTP | Strict nonce-based CSP on SSR pages, `Referrer-Policy`, `frame-ancestors 'none'`; HSTS set at nginx. **As built:** `Referrer-Policy: same-origin` (decision 18); uploaded images get their own sandbox CSP; credential pages are `noindex`, and private (uncached) for their recipient |
 | Abuse | Org approval gate, rate limits (auth, claim, verify, API), per-org daily send caps, suspension, report link, domain verification |
-| Recipient privacy | Email only as a salted hash in credentials, never on public pages; recipients can hide their page; random status-list indexes; PII deletion (removes email and name while keeping revocation working); retention settings |
+| Recipient privacy | Email only as a salted hash in credentials, never on public pages; recipients can hide their page; random status-list indexes; PII deletion (removes email and name while keeping revocation working); retention settings. **As built:** claim tokens (256-bit) stored as SHA-256, valid 90 days, traded for a credential-scoped HttpOnly cookie so they leave the address bar; credential pages kept out of search engines |
 | Accountability | Append-only audit log of every change, visible to org admins and exportable |
 | Supply chain | Lockfile; Renovate; `pnpm audit`; Trivy image scan in CI; non-root container; minimal base image |
 | Secrets | `.env` never committed; `*_FILE` variants for Docker secrets |
@@ -698,9 +757,9 @@ For local development, `compose.dev.yml` runs only the backing services: Postgre
 | `TRUST_PROXY` | Trust `X-Forwarded-*` from your nginx (loopback) |
 | `EMAIL_TRANSPORT` | `sendgrid` (credforge.app, M3) · `smtp` (generic; Mailpit in development) · `log` (print to the log, local trials only). Required in production |
 | `SENDGRID_API_KEY` / `_FILE` | Restricted key with only the Mail Send permission |
-| `SENDGRID_WEBHOOK_PUBLIC_KEY` | Verifies Event Webhook signatures |
+| `SENDGRID_WEBHOOK_PUBLIC_KEY` | Verifies Event Webhook signatures: the ECDSA P-256 verification key from SendGrid (base64 DER, or PEM). Unset: the webhook endpoint doesn't exist |
 | `SMTP_URL` | For `smtp` transport, e.g. `smtp://…@smtp.provider.com:2525` |
-| `EMAIL_FROM` | e.g. `credforge <awards@credforge.app>` |
+| `EMAIL_FROM` | e.g. `credforge <awards@credforge.app>`; required in production for `sendgrid` and `smtp`. Award emails use its address with the display name "{issuer} via {its name}" |
 | `STORAGE_DRIVER` | `s3` (credforge.app, DigitalOcean Spaces) or `local` (self-hosters, offline dev) |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET` | e.g. `https://nyc3.digitaloceanspaces.com`, `nyc3`, `credforge-prod` |
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` / `_FILE` | Limited Spaces key: Read/Write/Delete on the app bucket only |
@@ -710,7 +769,9 @@ For local development, `compose.dev.yml` runs only the backing services: Postgre
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` / `_FILE` | Optional |
 | `REQUIRE_MFA_FOR_ADMINS` | `true` on credforge.app: owners/admins need a credforge second factor after any sign-in |
 | `SIGNUP_MODE` | `approval` (credforge.app) · `open` · `invite` |
-| `DEFAULT_ORG_DAILY_SEND_LIMIT` | Per-org daily award-email cap; platform admins can raise it per org; `0` disables it (M3) |
+| `DEFAULT_ORG_DAILY_SEND_LIMIT` | Per-org award-email cap over any 24 hours (default 1000); platform admins can set it per org; `0` disables it |
+| `STORAGE_LOCAL_DIR` | For `STORAGE_DRIVER=local` (the default): `/data/uploads` in production (the `uploads` volume), `data/uploads` in the repository otherwise |
+| `S3_FORCE_PATH_STYLE` | Path-style bucket URLs, for S3-compatible servers that need them (default false) |
 | `LANDING_PAGE` | `true` on credforge.app; self-hosters may disable it |
 | `LOG_LEVEL`, `SENTRY_DSN` (optional) | Observability |
 
@@ -764,6 +825,7 @@ The app **refuses to start** if a required value is missing or malformed. It val
   - Later, if traffic warrants it, the Spaces CDN on a custom subdomain such as `assets.credforge.app` can sit in front. The URLs inside credentials don't change.
 - **Private files** (CSV uploads, exports) are never public. They are downloaded through the app after a permission check.
 - **Access keys** are created in the DigitalOcean control panel as *limited access keys* scoped to one bucket. They reach the containers as `_FILE` secrets. Rotate them by creating a new key, deploying it, then deleting the old one.
+- **As built in M3:** `apps/server/src/files/storage.ts`. The `s3` driver writes objects without an ACL (they keep the bucket's private default) and turns off the AWS SDK's default CRC32 checksums, which not every S3-compatible service accepts. Object keys follow the list above, except that issuer logos use the same layout as badge images: `orgs/{orgId}/issuers/{issuerId}/logo/{sha256}/original.{png|svg}`, `512.png`, `128.png` (decision 16). Objects are written before their database row, so a failure leaves only unreferenced, content-addressed objects. Imports and exports arrive with M4. The README lists the buckets, keys and settings to create.
 - **Development:** `compose.dev.yml` uses the `local` driver by default. Setting `STORAGE_DRIVER=s3` with the `credforge-dev` bucket exercises the real path. The `s3` driver's integration tests run against that bucket when its key is present.
 
 ---
@@ -783,6 +845,7 @@ The app **refuses to start** if a required value is missing or malformed. It val
 - **Interop checks:** the 1EdTech OB 3.0 validator, and importing JSON and baked badges into common wallets and validators. These are a release gate for the credential format.
 - **API integration tests** run against a real Postgres (Testcontainers), including the cross-tenant suite. Each test file gets its own database, migrated as the owner and used through the restricted app role, as in production. `TEST_DATABASE_URL` points them at an existing server instead. Google and Microsoft sign-in are tested through Better Auth's real callback, with only the provider's token endpoint stubbed.
 - **End-to-end tests** (Playwright) cover sign up → create achievement → award → claim → verify → revoke, with axe accessibility checks.
+- **As built in M3:** integration suites for achievements and awards (`awards.test.ts`: upload cleaning, content addresses, the approval-gate rule, the send cap, signing and verifying through the app's own issuer and status-list URLs, claim links, hiding, resends, revisions, archiving, suspension) and delivery (`delivery.test.ts`, with the real job queue: the email job is written in the award's transaction and disappears with a rollback; the worker never sends twice; retries and permanent failures; the signed webhook). Unit tests for the SVG sanitizer (20 attack shapes), the image pipeline, both storage drivers (the `s3` one against a stand-in SDK client, and against a real bucket when `S3_TEST_*` is set), the SendGrid request and a recorded signature vector. The e2e suite awards a badge through the UI to the owner's own address, opens the claim link from Mailpit as the recipient, verifies the downloaded baked PNG with `packages/ob3`, and runs axe on every new screen and public page.
 - **Checks run locally for now:** `pnpm check` runs lint, typecheck and tests, and a git pre-push hook runs it automatically. CI workflow files (lint, typecheck, test, build, Trivy scan, publish image) are written in M0 but only activate once the repo is hosted.
 - **1EdTech certification** comes after the MVP; it requires 1EdTech membership. Until then, don't claim to be certified.
 
@@ -845,6 +908,16 @@ Monorepo tooling: **pnpm workspaces**, TypeScript project references, ESLint + P
 - **Carried into M3:** the pending-org test-award rule (awarding only to members' verified addresses), `daily_send_limit` with `DEFAULT_ORG_DAILY_SEND_LIMIT`, the SendGrid transport and delivery tracking.
 - **Not yet built:** key rotation and master key rotation (CLI and UI; M5), domain verification (M5), changing a user's email address, sign-in rate limits are Better Auth's in-memory ones (production only).
 
+**M3 result (2026-10-15): done.**
+
+- **Demo path, automated** in `e2e/tests/awards.spec.ts` against the dev stack: create an achievement with SVG artwork and publish it, award it to yourself through the UI, the email arrives in Mailpit, its link opens the recipient's page (the token leaves the address bar), the downloaded baked PNG verifies with `packages/ob3` (signature and status), the baked SVG carries the credential, the certificate renders, hiding the page makes it 404 for others.
+- **1EdTech validator, against the running app:** the production Docker image was started with `PUBLIC_BASE_URL` set to a Cloudflare quick tunnel. A headless browser signed up and created the org, issuer (with a logo), achievement and award through the issuer app. Then https://vc.1ed.tech (Open Badges 3.0) was given the credential's URL, its `badge.png` URL and its `badge.svg` URL. All three: **14 tests, 0 errors, 0 warnings.** Per check the validator fetched the credential once, the issuer's `url` once and the status list 10 times, all answered with 200. The stack, its volumes and the tunnel were removed afterwards.
+- **Production stack:** the image builds (with sharp's Linux binaries) and the stack starts healthy; uploads, awards and the issuer app's form posts worked under the production headers with no console errors.
+- **Tests:** server 203 (3 more skip without a real Spaces key), contracts 8, ob3 127; e2e 28 (7 new).
+- **Found and fixed:** with Helmet's default `Referrer-Policy: no-referrer`, browsers send `Origin: null` on same-origin form posts, which the origin checks refused (decision 18).
+- **Not done in M3:** issuer-editable email templates, the "Report a problem" link, Markdown rendering of criteria, the issuer accent color, rate limiting (M5; it must leave `/status/` alone), and a run against a real SendGrid account and Spaces bucket (the code is tested against fixtures and a stand-in client; the README has the setup checklist).
+- **Carried into M4:** revoking (flip the bit, re-sign and republish the list; the page already shows "Revoked on …"), reissuing to fix a bounced or wrong address, CSV batches (orgs will need a higher send cap), the `/verify` tool.
+
 ### After the MVP
 
 - **Phase 2:** VC-JWT proofs (RS256); webhooks; a recipient "My badges" page (magic link, every badge sent to one email); reminder emails; a built-in badge designer; a certificate designer with server-rendered PDFs; **per-org enterprise SSO (OIDC/SAML)** tied to verified domains; **passkeys**; "join my org" requests for users whose verified email matches an org's verified domain; Spaces CDN on `assets.credforge.app` if traffic warrants it; custom sending domains per org.
@@ -878,5 +951,12 @@ Monorepo tooling: **pnpm workspaces**, TypeScript project references, ESLint + P
 | 12 | Database privileges | **Two roles.** `migrate` runs as the owner and creates a restricted app role (no DDL; SELECT and INSERT only on `audit_event`); triggers also block UPDATE, DELETE and TRUNCATE of the audit log for every role. New setting `POSTGRES_APP_PASSWORD`. See §7. | M2, 2026-10-15 |
 | 13 | Issuer logo upload | **Moved to M3**, with the image pipeline it depends on. See §17. | M2, 2026-10-15 |
 | 14 | Second-factor gate | **Per-session `mfa_verified_at`.** Required for owners, admins **and platform admins**; anyone who turned two-step verification on is also challenged after Google or Microsoft sign-in. "Trust this device" isn't offered. See §6.4. | M2, 2026-10-15 |
+| 15 | Open Graph card | **No text in the image**: the badge on a branded canvas. The card is content-addressed by the image's hash, so a name in it would go stale on rename, and drawing text would need a bundled font; `og:title` carries the name. See §5.4. | M3, 2026-10-15 |
+| 16 | Logo storage keys | `orgs/{orgId}/issuers/{issuerId}/logo/{sha256}/original.{png\|svg}` plus `512.png` and `128.png`, the same layout as badge images; logos may stay SVG. See §13.5. | M3, 2026-10-15 |
+| 17 | Claim links | **Traded for a cookie** scoped to the credential, then a redirect to the clean URL, so the token never stays in the address bar or in a link the recipient shares. "Opened" is the first valid use. See §8.4. | M3, 2026-10-15 |
+| 18 | Referrer policy | **`same-origin`** instead of Helmet's `no-referrer`: nothing goes to other sites, and browsers keep sending a real `Origin` on the app's own POSTs (with `no-referrer` they send `Origin: null`). Origin checks also accept `Origin: null` with `Sec-Fetch-Site: same-origin`. See §12. | M3, 2026-10-15 |
+| 19 | Award email enqueueing | **In the award's own transaction** (pg-boss through the Drizzle transaction's connection): no credential without its email job and no job without its credential. `email_message` tracks delivery; the worker never resends a message that was sent. See §8.2, §8.4. | M3, 2026-10-15 |
+| 20 | Downloads | **Open to anyone who can see the page** (the JSON is public by content negotiation anyway). Add to LinkedIn and hide/show are the recipient's. A hidden page is a 404 for everyone else, downloads included. See §8.4. | M3, 2026-10-15 |
+| 21 | Daily send cap | **Award emails over a rolling 24 hours**, default 1,000, per-org override by platform admins; awards without email aren't counted. See §6.3. | M3, 2026-10-15 |
 
-**Still open (not blocking M0–M2):** droplet size and region (match it to your Spaces region), the SendGrid account and sending-domain setup, the Google Cloud and Microsoft Entra app registrations, the platform admin's email address, and the privacy policy and terms content (needed before Google sign-in can go to production).
+**Still open (not blocking M0–M3):** droplet size and region (match it to your Spaces region), the SendGrid account and sending-domain setup and the Spaces buckets and keys (checklist in the README), the Google Cloud and Microsoft Entra app registrations, the platform admin's email address, and the privacy policy and terms content (needed before Google sign-in can go to production).

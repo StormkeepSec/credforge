@@ -21,6 +21,9 @@ export interface RunFixtures {
   inviteToken: string;
   /** A second open invitation (no account) for tests that act on an invitation's row. */
   pendingInviteEmail: string;
+  /** A published achievement with SVG artwork, and one credential awarded to the owner. */
+  achievement: { id: string; name: string };
+  credentialId: string;
 }
 
 const AUTH_DIR = resolve(import.meta.dirname, '../.auth');

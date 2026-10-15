@@ -3,9 +3,10 @@
 **Make achievement mean more.** credforge helps organizations create and award
 [Open Badges 3.0](https://www.imsglobal.org/spec/ob/v3p0) digital badges.
 
-> **Status:** early development. M0 (foundations), M1 (the credential engine in `packages/ob3`) and
-> M2 (accounts, organizations and issuers) are done. See the [design plan](docs/design-plan.md) for
-> the architecture and the roadmap.
+> **Status:** early development. M0 (foundations), M1 (the credential engine in `packages/ob3`),
+> M2 (accounts, organizations and issuers) and M3 (achievements, awarding one badge, delivery and
+> the public badge pages) are done. See the [design plan](docs/design-plan.md) for the architecture
+> and the roadmap.
 
 ## Requirements
 
@@ -23,7 +24,14 @@ pnpm dev           # migrate, then run the server, worker and web app with reloa
 ```
 
 Open **http://localhost:5173** and create an account. Every email the app sends (confirmation
-links, invitations, approval notices) lands in Mailpit at http://localhost:8025.
+links, invitations, approval notices, award emails) lands in Mailpit at http://localhost:8025.
+
+To see the whole loop: create an organization, set up its issuer profile, create an achievement
+with a badge image, publish it, then use **Award a badge → Award it to myself**. The award email
+arrives in Mailpit; its link opens the recipient's badge page, where the baked PNG, the JSON and the
+printable certificate can be downloaded. A new organization waits for a platform admin's approval
+(`SIGNUP_MODE=approval`), but it can already award badges to its own members' confirmed addresses.
+Uploaded images are stored in `data/uploads/` (git-ignored).
 
 No configuration is needed for development. To override a default (for example to try Google or
 Microsoft sign-in with development OAuth clients), copy `.env.development.example` to
@@ -56,11 +64,21 @@ existing server instead, set `TEST_DATABASE_URL` to a superuser connection strin
 creates and drops its own database there. The integration suite includes a cross-tenant test that
 tries every organization-scoped endpoint against another organization's data.
 
+The SendGrid transport and Event Webhook are tested without an account: requests are compared
+with what the Mail Send API expects, and webhook signatures are checked against a recorded test
+vector (`apps/server/test/fixtures/sendgrid/`). The `s3` storage driver is tested against a
+stand-in client; its tests against a real bucket run only when `S3_TEST_ENDPOINT`,
+`S3_TEST_REGION`, `S3_TEST_BUCKET`, `S3_TEST_ACCESS_KEY_ID` and `S3_TEST_SECRET_ACCESS_KEY` are
+set (use the `credforge-dev` Space and its dev-only key).
+
 ### Accessibility tests (end to end)
 
 `pnpm test:e2e` drives the issuer app in Chromium with [Playwright](https://playwright.dev) and
 checks every screen with [axe](https://github.com/dequelabs/axe-core) against the WCAG 2.0–2.2
 A and AA rules, in light and dark mode (emulated `prefers-color-scheme`) at 1280 and 375 px wide.
+It also awards a badge through the UI to the owner's own address, opens the claim link from
+Mailpit as the recipient, checks the public badge page, certificate and achievement page, and
+verifies the downloaded baked PNG with `@credforge/ob3`.
 Any violation fails the test. It also checks keyboard behaviour that broke before: the mobile menu
 takes focus, keeps Tab inside it and returns focus on Escape, its organization switcher is
 labelled, cancelling a confirm button returns focus to it, and step changes move focus to the new
@@ -109,10 +127,61 @@ This starts `db`, runs `migrate` once, and then starts `app` and `worker`. The a
 - **Two database roles.** `migrate` runs as the database owner and creates a restricted role for
   the app and worker (`POSTGRES_APP_PASSWORD`). That role can't run DDL, and it can only read and
   append to the audit log.
+- **Email.** `EMAIL_TRANSPORT=sendgrid` sends through SendGrid's v3 Web API over HTTPS
+  (DigitalOcean blocks outbound SMTP), `smtp` through any SMTP server. See *Email and storage for
+  credforge.app* below.
+- **Files.** `STORAGE_DRIVER=s3` keeps badge images and logos in a private S3-compatible bucket
+  (a DigitalOcean Space on credforge.app); `local` keeps them in the `uploads` volume, which then
+  needs backing up with the database. Images are always served through the app at permanent
+  `{PUBLIC_BASE_URL}` URLs, so the storage can change without breaking issued badges.
 - **Google and Microsoft sign-in** turn on when their client ID and secret are set. Redirect URIs
   are `{PUBLIC_BASE_URL}/api/auth/callback/google` and `…/callback/microsoft`. For Microsoft, add
   the optional ID token claim `xms_edov`; without it credforge sends its own confirmation email
   before a Microsoft account can be used.
+
+### Email and storage for credforge.app
+
+What has to exist outside credforge before `EMAIL_TRANSPORT=sendgrid` and `STORAGE_DRIVER=s3`
+work. Values in angle brackets come from the SendGrid and DigitalOcean control panels.
+
+**SendGrid**
+
+1. **Domain Authentication** (Settings → Sender Authentication → Authenticate Your Domain) for
+   `credforge.app`, with automated security on. SendGrid shows three **CNAME** records to add at
+   your DNS host, of this shape:
+
+   | Host | Type | Value |
+   |---|---|---|
+   | `em<nnnn>.credforge.app` | CNAME | `u<nnnnnnn>.wl<nnn>.sendgrid.net` |
+   | `s1._domainkey.credforge.app` | CNAME | `s1.domainkey.u<nnnnnnn>.wl<nnn>.sendgrid.net` |
+   | `s2._domainkey.credforge.app` | CNAME | `s2.domainkey.u<nnnnnnn>.wl<nnn>.sendgrid.net` |
+
+   Then click Verify. Link branding isn't needed: credforge turns click tracking off.
+2. A **DMARC** record: `_dmarc.credforge.app` TXT `v=DMARC1; p=none; rua=mailto:<you>@credforge.app`.
+   Move to `p=quarantine` once the reports show only SendGrid sending for the domain.
+3. A **restricted API key** with only *Mail Send* (Settings → API Keys → Restricted Access) →
+   `SENDGRID_API_KEY` (or `SENDGRID_API_KEY_FILE`).
+4. The **Event Webhook** (Settings → Mail Settings → Event Webhooks): POST URL
+   `https://credforge.app/api/webhooks/sendgrid`; events *Processed*, *Dropped*, *Deferred*,
+   *Delivered*, *Bounced* and *Spam Reports*; turn on **Signed Event Webhook Requests** and copy the
+   verification key → `SENDGRID_WEBHOOK_PUBLIC_KEY`. Then use *Test Your Integration*.
+5. `EMAIL_FROM=credforge <awards@credforge.app>` (an address on the authenticated domain).
+
+**DigitalOcean Spaces** (in the droplet's region)
+
+1. Buckets: `credforge-prod` (File Listing **restricted**, no CDN, no CORS needed) and
+   `credforge-dev` for development and the driver's integration tests. Turn on versioning for
+   `credforge-prod` (`aws s3api put-bucket-versioning --bucket credforge-prod
+   --versioning-configuration Status=Enabled --endpoint-url https://<region>.digitaloceanspaces.com`).
+2. **Limited access keys** (API → Spaces Keys): one with Read/Write/Delete on `credforge-prod`
+   only → `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (or `_FILE`); one on `credforge-dev` only
+   for development (`S3_TEST_*`).
+3. `S3_ENDPOINT=https://<region>.digitaloceanspaces.com`, `S3_REGION=<region>`,
+   `S3_BUCKET=credforge-prod`.
+
+No DNS record is needed for Spaces. nginx in front of the app needs `client_max_body_size 10m`
+(image uploads and webhook batches) and must not rate-limit `/status/`: validators fetch the
+status list for every check (the 1EdTech validator about 10 times).
 
 ## Repository layout
 
