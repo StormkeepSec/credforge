@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { achievementRoutes } from '../achievements/routes';
 import { auditRoutes } from '../audit/routes';
+import { credentialRoutes } from '../credentials/routes';
 import { issuerRoutes } from '../issuers/routes';
 import { meRoutes } from '../me/routes';
 import { installOrgAccess } from '../orgs/access';
@@ -21,9 +22,7 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 export function checkOrigin(publicBaseUrl: string) {
   return async (request: FastifyRequest) => {
     if (SAFE_METHODS.has(request.method)) return;
-    const origin = request.headers.origin;
-    if (origin === publicBaseUrl) return;
-    if (!origin && request.headers['sec-fetch-site'] === 'same-origin') return;
+    if (isSameOrigin(request, publicBaseUrl)) return;
     throw new ApiError(
       403,
       'bad_origin',
@@ -31,6 +30,20 @@ export function checkOrigin(publicBaseUrl: string) {
       'The request did not come from this site.',
     );
   };
+}
+
+/**
+ * Whether a request comes from this site. Browsers send `Origin`; under some referrer policies
+ * they send `Origin: null` for same-origin requests, and then `Sec-Fetch-Site` (which pages
+ * can't set) still says where it came from.
+ */
+export function isSameOrigin(request: FastifyRequest, publicBaseUrl: string): boolean {
+  const origin = request.headers.origin;
+  if (origin === publicBaseUrl) return true;
+  return (
+    (origin === undefined || origin === 'null') &&
+    request.headers['sec-fetch-site'] === 'same-origin'
+  );
 }
 
 /** The REST API (`/api/v1`). Every response is JSON, errors are `application/problem+json`. */
@@ -56,6 +69,7 @@ export const apiV1: FastifyPluginAsync<{ services: Services }> = async (app, { s
       await scoped.register(invitationRoutes, { services });
       await scoped.register(issuerRoutes, { services });
       await scoped.register(achievementRoutes, { services });
+      await scoped.register(credentialRoutes, { services });
       await scoped.register(auditRoutes, { services });
     },
     { prefix: '/orgs/:orgId' },

@@ -6,3 +6,11 @@
 @import "tailwindcss" source(none);
 @import "@credforge/ui/theme.css";
 @source "../../../server/src/public";
+
+/* Printable certificate (/credentials/:id/certificate): landscape, small margins. */
+@media print {
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
+}

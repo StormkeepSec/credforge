@@ -116,6 +116,12 @@ const envSchema = z
       .regex(/^smtps?:\/\//, 'must be an smtp:// or smtps:// URL')
       .optional(),
     EMAIL_FROM: z.string().trim().optional(),
+    DEFAULT_ORG_DAILY_SEND_LIMIT: z.coerce
+      .number({ error: 'must be a whole number' })
+      .int('must be a whole number')
+      .min(0, 'must be 0 (no limit) or more')
+      .default(1000),
+
     STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
     STORAGE_LOCAL_DIR: z.string().trim().optional(),
     S3_ENDPOINT: z
@@ -169,6 +175,13 @@ const envSchema = z
         message: 'is required in production, e.g. credforge <awards@credforge.app>',
       });
     }
+    if (env.EMAIL_FROM && !parseMailbox(env.EMAIL_FROM)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMAIL_FROM'],
+        message: 'must be an address or "Name <address>", e.g. credforge <awards@credforge.app>',
+      });
+    }
     if (env.STORAGE_DRIVER === 's3') {
       for (const name of [
         'S3_REGION',
@@ -197,6 +210,26 @@ const envSchema = z
       }
     }
   });
+
+/** A sender: `awards@credforge.app` or `credforge <awards@credforge.app>`. */
+export interface Mailbox {
+  name?: string;
+  address: string;
+}
+
+const ADDRESS = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
+
+export function parseMailbox(value: string): Mailbox | undefined {
+  const trimmed = value.trim();
+  const named = /^(.*?)\s*<([^<>]+)>$/.exec(trimmed);
+  if (named) {
+    const name = (named[1] ?? '').trim().replace(/^"(.*)"$/, '$1');
+    const address = (named[2] ?? '').trim();
+    if (!ADDRESS.test(address)) return undefined;
+    return name ? { name, address } : { address };
+  }
+  return ADDRESS.test(trimmed) ? { address: trimmed } : undefined;
+}
 
 export type StorageConfig =
   | { driver: 'local'; localDir: string }
@@ -243,6 +276,8 @@ export interface Config {
     /** e.g. `credforge <awards@credforge.app>`. */
     from: string;
   };
+  /** Award emails per org in any 24 hours, unless a platform admin set the org's own; 0 = no limit. */
+  defaultOrgDailySendLimit: number;
   storage: StorageConfig;
   oauth: {
     google?: OAuthClient;
@@ -329,6 +364,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
       from:
         env.EMAIL_FROM ?? `credforge <no-reply@${host === 'localhost' ? 'localhost.test' : host}>`,
     },
+    defaultOrgDailySendLimit: env.DEFAULT_ORG_DAILY_SEND_LIMIT,
     storage:
       env.STORAGE_DRIVER === 's3'
         ? {

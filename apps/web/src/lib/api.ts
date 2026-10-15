@@ -2,6 +2,8 @@ import type {
   Achievement,
   AchievementStatus,
   AuditEventPage,
+  CredentialDetails,
+  CredentialPage,
   InstanceInfo,
   Invitation,
   InvitationPreview,
@@ -122,6 +124,11 @@ export const queries = {
       queryKey: ['org', orgId, 'achievement', achievementId],
       queryFn: () => api<Achievement>(`/orgs/${orgId}/achievements/${achievementId}`),
     }),
+  credential: (orgId: string, credentialId: string) =>
+    queryOptions({
+      queryKey: ['org', orgId, 'credential', credentialId],
+      queryFn: () => api<CredentialDetails>(`/orgs/${orgId}/credentials/${credentialId}`),
+    }),
   platformOrgs: (status: OrgStatus | 'all') =>
     queryOptions({
       queryKey: ['platform', 'orgs', status],
@@ -131,6 +138,12 @@ export const queries = {
         ),
     }),
 };
+
+export async function fetchCredentialPage(orgId: string, before?: string) {
+  return api<CredentialPage>(
+    `/orgs/${orgId}/credentials${before ? `?before=${encodeURIComponent(before)}` : ''}`,
+  );
+}
 
 export async function fetchAuditPage(orgId: string, before?: number) {
   return api<AuditEventPage>(`/orgs/${orgId}/audit-events${before ? `?before=${before}` : ''}`);

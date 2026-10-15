@@ -22,15 +22,19 @@ interface Section {
   action?: { label: string; url: string };
   /** Small print under the button. */
   footnote?: string;
+  /** An image above the paragraphs (the badge in award emails). */
+  image?: { url: string; alt: string };
+  /** Signs off the plain-text version (default "— credforge"). */
+  signature?: string;
 }
 
 function render(kind: string, to: string, subject: string, section: Section): EmailMessage {
-  const { paragraphs, action, footnote } = section;
+  const { paragraphs, image, action, footnote } = section;
   const text = [
     ...paragraphs,
     ...(action ? [`${action.label}: ${action.url}`] : []),
     ...(footnote ? [footnote] : []),
-    '— credforge',
+    section.signature ?? '— credforge',
   ].join('\n\n');
 
   const p = (content: string) =>
@@ -42,6 +46,11 @@ function render(kind: string, to: string, subject: string, section: Section): Em
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #e5e7eb;border-radius:8px">
 <tr><td style="background:#111827;border-radius:8px 8px 0 0;padding:16px 24px;color:#fafafa;font-size:18px;font-weight:700">credforge</td></tr>
 <tr><td style="padding:24px">
+${
+  image
+    ? `<p style="margin:0 0 24px;text-align:center"><img src="${escapeHtml(image.url)}" width="160" height="160" alt="${escapeHtml(image.alt)}" style="display:inline-block;width:160px;height:160px;border:0"></p>`
+    : ''
+}
 ${paragraphs.map((paragraph) => p(escapeHtml(paragraph))).join('\n')}
 ${
   action
@@ -158,6 +167,59 @@ export function orgSuspendedMessage(
       ...(reason ? [`Reason: ${reason}`] : []),
     ],
   });
+}
+
+export interface AwardMessageInput {
+  to: string;
+  recipientName: string;
+  issuerName: string;
+  /** The issuer's public contact address, used as Reply-To. */
+  issuerEmail: string | null;
+  achievementName: string;
+  achievementDescription: string;
+  /** 512 px badge image. */
+  imageUrl: string | null;
+  claimUrl: string;
+  claimExpiresAt: Date;
+  /** EMAIL_FROM's display name, e.g. "credforge". */
+  serviceName: string;
+  /** The `email_message` row this send updates. */
+  trackingId?: string;
+  /** Wording for a link sent again. */
+  resend?: boolean;
+}
+
+/**
+ * The award email (design plan §8.4). It comes from credforge's address with the display name
+ * "{issuer} via credforge", and replies go to the issuer (§6.3). The claim link carries the
+ * recipient's token, so the email says to share the badge page's address instead.
+ */
+export function awardMessage(input: AwardMessageInput): EmailMessage {
+  const subject = `${input.issuerName} awarded you ${input.achievementName}`;
+  const message = render('award', input.to, subject, {
+    image: input.imageUrl
+      ? { url: input.imageUrl, alt: `${input.achievementName} badge` }
+      : undefined,
+    paragraphs: [
+      `Hi ${input.recipientName},`,
+      `${input.issuerName} awarded you ${input.achievementName}.`,
+      input.achievementDescription,
+      'Open your badge to see it, download it, add it to LinkedIn or share it.',
+    ],
+    action: { label: 'View your badge', url: input.claimUrl },
+    footnote:
+      `${input.resend ? 'This is a new link; earlier ones no longer work. ' : ''}This link is just for you and works until ${formatDate(input.claimExpiresAt)}: it lets you download your badge and choose whether its page is public. To share your badge, use the address of its page instead. ` +
+      (input.issuerEmail
+        ? `Questions about this badge? Reply to this email to reach ${input.issuerName}.`
+        : `Questions about this badge? Contact ${input.issuerName}.`),
+    signature: `— Sent by ${input.serviceName} for ${input.issuerName}`,
+  });
+  return {
+    ...message,
+    fromName: `${input.issuerName} via ${input.serviceName}`,
+    ...(input.issuerEmail && { replyTo: input.issuerEmail }),
+    ...(input.trackingId && { trackingId: input.trackingId }),
+  };
 }
 
 function articleFor(word: string): string {

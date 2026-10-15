@@ -14,8 +14,8 @@ import {
   CardTitle,
 } from '../components/ui/card';
 import { Alert, Spinner } from '../components/ui/feedback';
-import { Field, Textarea } from '../components/ui/input';
-import { errorMessage, post, queries } from '../lib/api';
+import { Field, Input, Textarea } from '../components/ui/input';
+import { ApiError, errorMessage, patch, post, queries } from '../lib/api';
 import { cn, formatDate } from '../lib/utils';
 
 const TABS: { status: OrgStatus | 'all'; label: string }[] = [
@@ -88,6 +88,7 @@ function OrgCard({ org }: { org: PlatformOrg }) {
         {org.statusReason && (
           <p className="text-muted-foreground">Reason given: {org.statusReason}</p>
         )}
+        <SendLimit org={org} />
         {decide.isError && <Alert variant="error">{errorMessage(decide.error)}</Alert>}
         {reasonFor && (
           <Field label={`Reason (shown to the organization’s owners)`}>
@@ -142,6 +143,66 @@ function OrgCard({ org }: { org: PlatformOrg }) {
         )}
       </CardFooter>
     </Card>
+  );
+}
+
+/** An org's daily award-email cap (design plan §6.3): its own, or the instance default. */
+function SendLimit({ org }: { org: PlatformOrg }) {
+  const queryClient = useQueryClient();
+  const [value, setValue] = useState(org.dailySendLimit === null ? '' : String(org.dailySendLimit));
+  const [saved, setSaved] = useState(false);
+  const save = useMutation({
+    mutationFn: () =>
+      patch(`/platform/orgs/${org.id}/limits`, {
+        dailySendLimit: value.trim() === '' ? null : Number(value),
+      }),
+    onSuccess: async () => {
+      setSaved(true);
+      await queryClient.invalidateQueries({ queryKey: ['platform'] });
+    },
+  });
+  const fallback =
+    org.defaultDailySendLimit === 0
+      ? 'no limit'
+      : `${org.defaultDailySendLimit.toLocaleString()} a day`;
+  const fieldError =
+    save.error instanceof ApiError ? save.error.fieldErrors.dailySendLimit : undefined;
+  return (
+    <form
+      className="flex flex-wrap items-end gap-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        setSaved(false);
+        save.mutate();
+      }}
+    >
+      <Field
+        label="Award emails per day"
+        description={`Empty: the instance default (${fallback}). 0: no limit.`}
+        error={fieldError ?? (save.isError && !fieldError ? errorMessage(save.error) : undefined)}
+        className="max-w-xs"
+      >
+        {(props) => (
+          <Input
+            {...props}
+            type="number"
+            inputMode="numeric"
+            min={0}
+            value={value}
+            onChange={(event) => {
+              setSaved(false);
+              setValue(event.target.value);
+            }}
+          />
+        )}
+      </Field>
+      <Button type="submit" variant="outline" pending={save.isPending}>
+        Save limit
+      </Button>
+      <span role="status" className="text-sm text-muted-foreground">
+        {saved ? 'Saved.' : ''}
+      </span>
+    </form>
   );
 }
 

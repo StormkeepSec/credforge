@@ -2,7 +2,9 @@ import { auditEvent, type Queryable } from '@credforge/db';
 
 export type AuditActor =
   | { type: 'user'; id: string; label: string | null }
-  | { type: 'system'; id?: null; label?: string | null };
+  | { type: 'system'; id?: null; label?: string | null }
+  /** The recipient of a credential, acting through their claim link (no account). */
+  | { type: 'recipient'; id?: null; label?: string | null };
 
 export interface AuditRequestInfo {
   ip?: string | null;

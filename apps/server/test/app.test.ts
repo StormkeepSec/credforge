@@ -62,6 +62,8 @@ describe('landing page', () => {
     expect(res.body).toContain('<link rel="canonical" href="https://credforge.test/"/>');
     expect(res.headers['content-security-policy']).toContain("frame-ancestors 'none'");
     expect(res.headers['strict-transport-security']).toContain('max-age=31536000');
+    // No referrer to other sites, but same-origin form posts keep a real Origin header.
+    expect(res.headers['referrer-policy']).toBe('same-origin');
   });
 
   it('redirects to sign-in when the landing page is disabled', async () => {
@@ -106,5 +108,25 @@ describe('request ids', () => {
       headers: { 'x-request-id': 'has spaces <script>' },
     });
     expect(res.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe('isSameOrigin', () => {
+  const request = (headers: Record<string, string>) => ({ headers }) as never;
+  const base = 'https://credforge.test';
+
+  it('trusts this origin, or a same-origin fetch that sends no usable Origin', async () => {
+    const { isSameOrigin } = await import('../src/api/v1');
+    expect(isSameOrigin(request({ origin: base }), base)).toBe(true);
+    expect(isSameOrigin(request({ origin: 'null', 'sec-fetch-site': 'same-origin' }), base)).toBe(
+      true,
+    );
+    expect(isSameOrigin(request({ 'sec-fetch-site': 'same-origin' }), base)).toBe(true);
+    expect(isSameOrigin(request({ origin: 'https://evil.example' }), base)).toBe(false);
+    expect(isSameOrigin(request({ origin: 'null', 'sec-fetch-site': 'cross-site' }), base)).toBe(
+      false,
+    );
+    expect(isSameOrigin(request({ origin: 'null' }), base)).toBe(false);
+    expect(isSameOrigin(request({}), base)).toBe(false);
   });
 });

@@ -19,6 +19,8 @@ export interface OrgAccess {
     status: OrgStatus;
     statusReason: string | null;
     approvedAt: Date | null;
+    /** The org's own daily send limit; null uses the instance default. */
+    dailySendLimit: number | null;
     createdAt: Date;
   };
   memberId: string;
@@ -47,6 +49,7 @@ export function installOrgAccess(app: FastifyInstance, { db, auth, config }: Ser
         status: organization.status,
         statusReason: organization.statusReason,
         approvedAt: organization.approvedAt,
+        dailySendLimit: organization.dailySendLimit,
         createdAt: organization.createdAt,
       })
       .from(member)
@@ -61,6 +64,7 @@ export function installOrgAccess(app: FastifyInstance, { db, auth, config }: Ser
         status: row.status,
         statusReason: row.statusReason,
         approvedAt: row.approvedAt,
+        dailySendLimit: row.dailySendLimit,
         createdAt: row.createdAt,
       },
       memberId: row.memberId,

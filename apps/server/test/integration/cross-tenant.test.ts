@@ -1,12 +1,14 @@
 import {
   achievement,
   auditEvent,
+  credential,
   eq,
   file,
   invitation,
   issuer,
   member,
   organization,
+  statusList,
 } from '@credforge/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pngWithMetadata } from '../support/images';
@@ -28,6 +30,7 @@ interface Tenant {
   memberId: string;
   invitationId: string;
   achievementId: string;
+  credentialId: string;
 }
 
 let png: Buffer;
@@ -72,7 +75,13 @@ async function tenant(name: string): Promise<Tenant> {
   await owner.upload(`/api/v1/orgs/${orgId}/achievements/${achievementId}/image`, png, 'image/png');
   await owner.post(`/api/v1/orgs/${orgId}/achievements/${achievementId}/publish`);
   await owner.upload(`/api/v1/orgs/${orgId}/issuers/${issuerId}/logo`, png, 'image/png');
-  return { owner, orgId, issuerId, memberId, invitationId, achievementId };
+  const awarded = await owner.post(`/api/v1/orgs/${orgId}/credentials`, {
+    achievementId,
+    recipient: { name: 'Owner', email: owner.email },
+  });
+  const credentialId = (awarded.json() as { id: string }).id;
+  if (!credentialId) throw new Error(`Award failed: ${awarded.body}`);
+  return { owner, orgId, issuerId, memberId, invitationId, achievementId, credentialId };
 }
 
 beforeAll(async () => {
@@ -91,7 +100,7 @@ interface Case {
   route: string;
   body?: unknown;
   /** Has an id of a resource inside the org. */
-  resource?: 'memberId' | 'invitationId' | 'issuerId' | 'achievementId';
+  resource?: 'memberId' | 'invitationId' | 'issuerId' | 'achievementId' | 'credentialId';
   /** Sends an image file as the body (uploads). */
   upload?: true;
 }
@@ -142,6 +151,15 @@ const CASES: Case[] = [
   { method: 'POST', route: '/achievements/:achievementId/archive', resource: 'achievementId' },
   { method: 'POST', route: '/achievements/:achievementId/restore', resource: 'achievementId' },
   { method: 'GET', route: '/achievements/:achievementId/revisions', resource: 'achievementId' },
+  { method: 'GET', route: '/credentials' },
+  {
+    method: 'POST',
+    route: '/credentials',
+    body: { achievementId: crypto.randomUUID(), recipient: { name: 'X', email: 'x@example.org' } },
+  },
+  { method: 'POST', route: '/credentials/preview', body: { achievementId: crypto.randomUUID() } },
+  { method: 'GET', route: '/credentials/:credentialId', resource: 'credentialId' },
+  { method: 'POST', route: '/credentials/:credentialId/resend', resource: 'credentialId' },
 ];
 
 /** Sends a case as `client`: JSON, or an image upload. */
@@ -156,7 +174,8 @@ function url(orgId: string, route: string, ids: Partial<Tenant>) {
     .replace(':memberId', ids.memberId ?? '')
     .replace(':invitationId', ids.invitationId ?? '')
     .replace(':issuerId', ids.issuerId ?? '')
-    .replace(':achievementId', ids.achievementId ?? '');
+    .replace(':achievementId', ids.achievementId ?? '')
+    .replace(':credentialId', ids.credentialId ?? '');
 }
 
 /** Everything of org B's that an intruder might change. */
@@ -170,7 +189,9 @@ async function snapshotB() {
       .select()
       .from(achievement)
       .where(eq(achievement.orgId, b.orgId)),
+    credentials: await env.ownerDb.select().from(credential).where(eq(credential.orgId, b.orgId)),
     files: await env.ownerDb.select().from(file).where(eq(file.orgId, b.orgId)),
+    statusLists: await env.ownerDb.select().from(statusList).where(eq(statusList.orgId, b.orgId)),
   };
 }
 
@@ -206,7 +227,7 @@ describe('cross-tenant access', () => {
   });
 
   it("never lists another org's data", async () => {
-    const bIds = [b.orgId, b.issuerId, b.memberId, b.invitationId, b.achievementId];
+    const bIds = [b.orgId, b.issuerId, b.memberId, b.invitationId, b.achievementId, b.credentialId];
     for (const test of CASES.filter((item) => item.method === 'GET' && !item.resource)) {
       const response = await a.owner.get(url(a.orgId, test.route, a));
       expect(response.statusCode, test.route).toBe(200);
@@ -241,6 +262,20 @@ describe('cross-tenant access', () => {
       );
       expect(response.statusCode, path).toBe(403);
     }
+  });
+
+  it("can't award or preview another org's achievement through its own org", async () => {
+    const before = await snapshotB();
+    const awarded = await a.owner.post(`/api/v1/orgs/${a.orgId}/credentials`, {
+      achievementId: b.achievementId,
+      recipient: { name: 'Owner', email: a.owner.email },
+    });
+    expect(awarded.statusCode).toBe(400);
+    const preview = await a.owner.post(`/api/v1/orgs/${a.orgId}/credentials/preview`, {
+      achievementId: b.achievementId,
+    });
+    expect(preview.statusCode).toBe(404);
+    expect(await snapshotB()).toEqual(before);
   });
 
   it('treats a malformed org id as not found', async () => {

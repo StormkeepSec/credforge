@@ -47,6 +47,8 @@ export type ProblemCode =
   | 'unsupported_file'
   | 'issuer_not_ready'
   | 'achievement_not_active'
+  | 'recipient_not_allowed'
+  | 'send_limit_reached'
   | 'internal_error';
 
 export interface Problem {
@@ -134,6 +136,17 @@ export const platformDecisionInput = z.object({ reason: optionalText(1000).optio
 export type PlatformDecisionInput = z.input<typeof platformDecisionInput>;
 
 export const platformOrgsQuery = z.object({ status: z.enum(ORG_STATUSES).optional() });
+
+/** `null` goes back to the instance default; 0 means no limit. */
+export const platformOrgLimitsInput = z.object({
+  dailySendLimit: z
+    .number({ error: 'Enter a whole number' })
+    .int('Enter a whole number')
+    .min(0, 'Can’t be negative')
+    .max(1_000_000, 'At most 1,000,000')
+    .nullable(),
+});
+export type PlatformOrgLimitsInput = z.input<typeof platformOrgLimitsInput>;
 
 // ---- achievements ----
 
@@ -291,6 +304,54 @@ export type AchievementStatus = (typeof ACHIEVEMENT_STATUSES)[number];
 
 export const achievementsQuery = z.object({ status: z.enum(ACHIEVEMENT_STATUSES).optional() });
 
+// ---- awarding ----
+
+export const evidenceInput = z
+  .object({
+    url: optionalWebUrl.optional(),
+    name: optionalText(200).optional(),
+    narrative: optionalText(4000).optional(),
+  })
+  .refine((value) => value.url || value.narrative, {
+    path: ['url'],
+    message: 'Add a link or a description',
+  });
+export type EvidenceInput = z.input<typeof evidenceInput>;
+
+/** A calendar date (`2026-11-02`) or a full ISO 8601 date-time. */
+const dateField = z
+  .string()
+  .trim()
+  .refine(
+    (value) =>
+      /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/.test(value) &&
+      !Number.isNaN(new Date(value).getTime()),
+    'Enter a date',
+  );
+
+export const awardInput = z.object({
+  achievementId: z.uuid('Choose an achievement'),
+  recipient: z.object({
+    name: text(200),
+    email: emailField,
+  }),
+  /** When it was earned (the credential's `validFrom`). Defaults to now; can't be in the future. */
+  issuedOn: dateField.optional(),
+  /** Expiry (the credential's `validUntil`); defaults to the achievement's validity, if any. */
+  expiresOn: dateField.nullable().optional(),
+  evidence: z.array(evidenceInput).max(5, 'At most 5 pieces of evidence').optional(),
+  /** Email the recipient their claim link (default true). */
+  sendEmail: z.boolean().optional(),
+});
+export type AwardInput = z.input<typeof awardInput>;
+
+export const credentialsQuery = z.object({
+  /** Cursor: the `next` value from the previous page. */
+  before: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  achievementId: z.uuid().optional(),
+});
+
 export const auditEventsQuery = z.object({
   before: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -350,6 +411,8 @@ export interface OrgDetails extends OrgSummary {
   role: OrgRole;
   permissions: Permission[];
   approvedAt: string | null;
+  /** Award emails it may send in any 24 hours; null means no limit. */
+  dailySendLimit: number | null;
 }
 
 export interface Member {
@@ -429,6 +492,10 @@ export interface PlatformOrg extends OrgSummary {
   requestedBy: { name: string; email: string } | null;
   memberCount: number;
   issuers: { id: string; name: string; website: string | null }[];
+  /** This org's own limit; null uses the instance default. */
+  dailySendLimit: number | null;
+  /** The instance default (DEFAULT_ORG_DAILY_SEND_LIMIT); 0 means no limit. */
+  defaultDailySendLimit: number;
 }
 
 export interface Alignment {
@@ -469,6 +536,70 @@ export interface AchievementRevision {
   revision: number;
   createdAt: string;
   createdBy: { id: string; name: string } | null;
+}
+
+/**
+ * Where a credential's email stands (design plan §8.4). `not_sent` when the award was made
+ * without email.
+ */
+export type DeliveryStatus =
+  | 'not_sent'
+  | 'queued'
+  | 'sent'
+  | 'delivered'
+  | 'bounced'
+  | 'dropped'
+  | 'spam_reported'
+  | 'failed';
+
+export interface EmailDelivery {
+  id: string;
+  kind: string;
+  to: string;
+  status: Exclude<DeliveryStatus, 'not_sent'>;
+  attempts: number;
+  lastError: string | null;
+  events: { event: string; at: string; reason?: string }[];
+  createdAt: string;
+  sentAt: string | null;
+  deliveredAt: string | null;
+  bouncedAt: string | null;
+}
+
+export interface CredentialSummary {
+  id: string;
+  /** The credential's permanent public URL. */
+  url: string;
+  achievement: { id: string; name: string; revision: number; image128: string | null };
+  recipient: { name: string; email: string };
+  status: 'draft' | 'issued' | 'revoked';
+  validFrom: string;
+  validUntil: string | null;
+  visibility: 'public' | 'hidden';
+  /** When the recipient first opened their claim link. */
+  acceptedAt: string | null;
+  delivery: DeliveryStatus;
+  createdAt: string;
+}
+
+export interface CredentialDetails extends CredentialSummary {
+  issuedBy: { type: 'user' | 'api_key'; id: string | null; label: string | null };
+  /** Until when the latest claim link works; null if none was sent. */
+  claimLinkExpiresAt: string | null;
+  emails: EmailDelivery[];
+  /** The signed OB 3.0 credential. */
+  document: Record<string, unknown>;
+}
+
+export interface CredentialPage {
+  credentials: CredentialSummary[];
+  /** Pass as `before` for the next (older) page; null on the last page. */
+  next: string | null;
+}
+
+/** What the recipient's email will say (POST /credentials/preview). */
+export interface AwardPreview {
+  email: { subject: string; text: string; from: string; replyTo: string | null };
 }
 
 export interface AuditEvent {

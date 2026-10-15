@@ -26,13 +26,26 @@ export function serializeOrgSummary(row: OrgRow): OrgSummary {
   };
 }
 
-export function serializeOrgDetails(access: OrgAccess): OrgDetails {
+export function serializeOrgDetails(access: OrgAccess, defaultDailySendLimit: number): OrgDetails {
   return {
     ...serializeOrgSummary(access.org),
     approvedAt: access.org.approvedAt?.toISOString() ?? null,
     role: access.role,
     permissions: [...access.permissions],
+    dailySendLimit: effectiveDailySendLimit(access.org.dailySendLimit, defaultDailySendLimit),
   };
+}
+
+/**
+ * The award emails an org may send in any 24 hours: its own limit if a platform admin set one,
+ * otherwise the instance default. Null means no limit (a limit of 0).
+ */
+export function effectiveDailySendLimit(
+  orgLimit: number | null,
+  defaultLimit: number,
+): number | null {
+  const limit = orgLimit ?? defaultLimit;
+  return limit === 0 ? null : limit;
 }
 
 /**

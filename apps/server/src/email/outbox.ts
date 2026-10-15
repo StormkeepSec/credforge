@@ -1,4 +1,5 @@
-import type { PgBoss } from 'pg-boss';
+import type { Queryable } from '@credforge/db';
+import type { PgBoss, Db as QueueDatabase } from 'pg-boss';
 import type { Logger } from 'pino';
 import { QUEUES } from '../jobs/queues';
 import type { EmailMessage, EmailTransport } from './transport';
@@ -8,7 +9,11 @@ import type { EmailMessage, EmailTransport } from './transport';
  * enqueues a job and the worker sends it, with retries (design plan §4).
  */
 export interface EmailOutbox {
-  send(message: EmailMessage): Promise<void>;
+  /**
+   * Enqueues a message. With `tx`, the job is written in that transaction, so it exists if and
+   * only if the transaction commits (an award and its email).
+   */
+  send(message: EmailMessage, options?: { tx?: Queryable }): Promise<void>;
 }
 
 /** Retries with backoff for about an hour; the job (which holds links with tokens) is deleted soon after. */
@@ -30,10 +35,33 @@ export const EMAIL_WORK_OPTIONS = {
   pollingIntervalSeconds: 0.5,
 } as const;
 
+/**
+ * Lets pg-boss write through a Drizzle (node-postgres) transaction's own connection. Drizzle
+ * keeps the transaction's client on its session; this is the one place that relies on that.
+ */
+export function transactionDatabase(tx: Queryable): QueueDatabase {
+  const client = (tx as unknown as { session?: { client?: unknown } }).session?.client as
+    | { query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }> }
+    | undefined;
+  if (!client || typeof client.query !== 'function') {
+    throw new Error('Expected a node-postgres Drizzle transaction.');
+  }
+  return {
+    async executeSql(text, values) {
+      const result = await client.query(text, values);
+      return { rows: result.rows as never[] };
+    },
+  };
+}
+
 export function createQueueOutbox(boss: Pick<PgBoss, 'send'>): EmailOutbox {
   return {
-    async send(message) {
-      await boss.send(QUEUES.email, message);
+    async send(message, options) {
+      await boss.send(
+        QUEUES.email,
+        message,
+        options?.tx ? { db: transactionDatabase(options.tx) } : undefined,
+      );
     },
   };
 }

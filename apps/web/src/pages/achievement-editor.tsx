@@ -612,6 +612,15 @@ function StatusCard({
           )}
           {achievement.status === 'active' && (
             <>
+              <Button asChild>
+                <Link
+                  to="/app/orgs/$orgId/award"
+                  params={{ orgId }}
+                  search={{ achievementId: achievement.id }}
+                >
+                  Award it
+                </Link>
+              </Button>
               <ConfirmButton
                 variant="outline"
                 confirmLabel="Archive"

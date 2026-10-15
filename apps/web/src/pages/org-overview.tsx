@@ -54,9 +54,18 @@ export function OrgOverviewPage({ orgId }: { orgId: string }) {
     enabled: Boolean(org?.permissions.includes('issuer:read')),
   });
   const members = useQuery(queries.members(orgId));
+  const achievements = useQuery({
+    ...queries.achievements(orgId),
+    enabled: Boolean(org?.permissions.includes('achievement:read')),
+  });
   if (!org || !me) return <Spinner />;
 
   const hasIssuer = (issuers.data?.issuers.length ?? 0) > 0;
+  const list = achievements.data?.achievements ?? [];
+  const hasAchievement = list.some((achievement) => achievement.status !== 'draft');
+  const hasAwarded = list.some((achievement) => achievement.awardedCount > 0);
+  const canCreate = org.permissions.includes('achievement:write') && isWritable(org);
+  const canAward = org.permissions.includes('credential:issue') && isWritable(org);
   const hasTeam = (members.data?.members.length ?? 0) > 1;
   const canEdit = org.permissions.includes('issuer:update') && isWritable(org);
 
@@ -101,7 +110,7 @@ export function OrgOverviewPage({ orgId }: { orgId: string }) {
                 </>
               ) : (
                 <>
-                  Your name, website and contact address, plus the key that signs your badges.{' '}
+                  Your name, logo, website and contact address, plus the key that signs your badges.{' '}
                   {canEdit && (
                     <Link to="/app/orgs/$orgId/issuer" params={{ orgId }} className={link}>
                       Set it up
@@ -118,8 +127,51 @@ export function OrgOverviewPage({ orgId }: { orgId: string }) {
             <Step state="later" title="Verify your website’s domain">
               Shows “Website verified” on your public pages. Coming in a later update.
             </Step>
-            <Step state="later" title="Create your first achievement and award it to yourself">
-              Coming in the next update.
+            <Step
+              state={hasAchievement ? 'done' : 'todo'}
+              title="Create and publish your first achievement"
+            >
+              {hasAchievement ? (
+                <>
+                  Your achievements are ready to award.{' '}
+                  <Link to="/app/orgs/$orgId/achievements" params={{ orgId }} className={link}>
+                    See achievements
+                  </Link>
+                </>
+              ) : (
+                <>
+                  A name, an image and how it is earned.{' '}
+                  {canCreate && hasIssuer && (
+                    <Link
+                      to="/app/orgs/$orgId/achievements/new"
+                      params={{ orgId }}
+                      className={link}
+                    >
+                      Create one
+                    </Link>
+                  )}
+                </>
+              )}
+            </Step>
+            <Step state={hasAwarded ? 'done' : 'todo'} title="Award it to yourself">
+              {hasAwarded ? (
+                <>
+                  You can see exactly what your recipients get.{' '}
+                  <Link to="/app/orgs/$orgId/credentials" params={{ orgId }} className={link}>
+                    See awarded badges
+                  </Link>
+                </>
+              ) : (
+                <>
+                  See exactly what your recipients will get: the email, the badge page and the
+                  download.{' '}
+                  {canAward && hasAchievement && (
+                    <Link to="/app/orgs/$orgId/award" params={{ orgId }} className={link}>
+                      Award a badge
+                    </Link>
+                  )}
+                </>
+              )}
             </Step>
           </ol>
         </CardContent>

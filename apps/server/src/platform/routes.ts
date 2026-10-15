@@ -2,6 +2,7 @@ import {
   type OrgStatus,
   type PlatformOrg,
   platformDecisionInput,
+  platformOrgLimitsInput,
   platformOrgsQuery,
 } from '@credforge/contracts';
 import { asc, desc, eq, inArray, issuer, member, organization, sql, user } from '@credforge/db';
@@ -85,6 +86,8 @@ export const platformRoutes: FastifyPluginAsync<{ services: Services }> = async 
         issuers: issuers
           .filter((row) => row.orgId === org.id)
           .map(({ id, name, website }) => ({ id, name, website })),
+        dailySendLimit: org.dailySendLimit,
+        defaultDailySendLimit: config.defaultOrgDailySendLimit,
       })),
     };
   });
@@ -140,6 +143,32 @@ export const platformRoutes: FastifyPluginAsync<{ services: Services }> = async 
       }
       return { id: org.id, status: org.status, statusReason: org.statusReason };
     };
+
+  /** Sets an org's own daily send limit (§6.3); null goes back to the instance default. */
+  app.patch('/orgs/:orgId/limits', async (request, reply) => {
+    const actor = await requirePlatformAdmin(request, reply);
+    const orgId = uuidParam((request.params as { orgId?: string }).orgId, 'Organization');
+    const { dailySendLimit } = parse(platformOrgLimitsInput, request.body);
+    await db.transaction(async (tx) => {
+      await lockOrg(tx, orgId);
+      const [current] = await tx.select().from(organization).where(eq(organization.id, orgId));
+      if (!current) throw notFound('Organization');
+      if (current.dailySendLimit === dailySendLimit) return;
+      await tx
+        .update(organization)
+        .set({ dailySendLimit, updatedAt: new Date() })
+        .where(eq(organization.id, orgId));
+      await recordAudit(tx, {
+        orgId,
+        actor: userActor(actor),
+        action: 'org.limits_changed',
+        target: { type: 'organization', id: orgId },
+        data: { dailySendLimit: { from: current.dailySendLimit, to: dailySendLimit } },
+        request: requestInfo(request),
+      });
+    });
+    return { id: orgId, dailySendLimit, defaultDailySendLimit: config.defaultOrgDailySendLimit };
+  });
 
   app.post('/orgs/:orgId/approve', decide('approve'));
   app.post('/orgs/:orgId/decline', decide('decline'));

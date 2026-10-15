@@ -29,9 +29,9 @@ export function OrgStatusBanner({ org }: { org: OrgDetails }) {
         title={`${org.name} is waiting for approval`}
         className="mb-8"
       >
-        You can set up your issuer profile and invite your team now. Once achievements arrive,
-        you’ll be able to test-award them to your own members. Awarding to anyone else opens when a
-        platform admin approves the organization; we’ll email the owners.
+        You can set up your issuer profile, create achievements and test-award them to your own
+        members now. Awarding to anyone else opens when a platform admin approves the organization;
+        we’ll email the owners.
       </Alert>
     );
   }

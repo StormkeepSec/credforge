@@ -94,22 +94,27 @@ export const userOrgRoutes: FastifyPluginAsync<{ services: Services }> = async (
     }
 
     return reply.code(201).send(
-      serializeOrgDetails({
-        org: created.org,
-        memberId: created.memberId,
-        role: 'owner',
-        permissions: permissionsFor('owner'),
-        actor,
-      }),
+      serializeOrgDetails(
+        {
+          org: created.org,
+          memberId: created.memberId,
+          role: 'owner',
+          permissions: permissionsFor('owner'),
+          actor,
+        },
+        config.defaultOrgDailySendLimit,
+      ),
     );
   });
 };
 
 /** `/api/v1/orgs/:orgId`: read and rename the org. */
 export const orgRoutes: FastifyPluginAsync<{ services: Services }> = async (app, { services }) => {
-  const { db } = services;
+  const { db, config } = services;
 
-  app.get('/', async (request) => serializeOrgDetails(orgAccessOf(request)));
+  app.get('/', async (request) =>
+    serializeOrgDetails(orgAccessOf(request), config.defaultOrgDailySendLimit),
+  );
 
   app.patch('/', async (request) => {
     const access = requirePermission(request, 'org:update');
@@ -131,6 +136,9 @@ export const orgRoutes: FastifyPluginAsync<{ services: Services }> = async (app,
         });
       });
     }
-    return serializeOrgDetails({ ...access, org: { ...access.org, name: input.name } });
+    return serializeOrgDetails(
+      { ...access, org: { ...access.org, name: input.name } },
+      config.defaultOrgDailySendLimit,
+    );
   });
 };

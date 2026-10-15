@@ -23,6 +23,8 @@ import {
 import { AccountSettingsPage } from './pages/account-settings';
 import { AchievementEditorPage } from './pages/achievement-editor';
 import { AchievementsPage } from './pages/achievements';
+import { AwardPage } from './pages/award';
+import { CredentialDetailPage, CredentialsPage } from './pages/credentials';
 import { InvitePage } from './pages/invite';
 import { LoginPage } from './pages/login';
 import { NewOrgPage } from './pages/new-org';
@@ -250,6 +252,32 @@ const achievementRoute = createRoute({
   },
 });
 
+const awardRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: '/award',
+  validateSearch: z.object({ achievementId: z.string().optional() }),
+  component: function Award() {
+    return <AwardPage orgId={useOrgId()} achievementId={awardRoute.useSearch().achievementId} />;
+  },
+});
+
+const credentialsRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: '/credentials',
+  component: function Credentials() {
+    return <CredentialsPage orgId={useOrgId()} />;
+  },
+});
+
+const credentialRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: '/credentials/$credentialId',
+  component: function Credential() {
+    const { credentialId } = credentialRoute.useParams();
+    return <CredentialDetailPage orgId={useOrgId()} credentialId={credentialId} />;
+  },
+});
+
 const orgMembersRoute = createRoute({
   getParentRoute: () => orgRoute,
   path: '/members',
@@ -306,6 +334,9 @@ const routeTree = rootRoute.addChildren([
       achievementsRoute,
       newAchievementRoute,
       achievementRoute,
+      awardRoute,
+      credentialsRoute,
+      credentialRoute,
       orgIssuerRoute,
       orgMembersRoute,
       orgSettingsRoute,

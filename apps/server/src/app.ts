@@ -10,6 +10,7 @@ import { authRoutes } from './auth/routes';
 import type { Config } from './config';
 import { loggerOptions } from './logger';
 import { resolvePublicAssets } from './public/assets';
+import { publicCredentialRoutes } from './public/credential-routes';
 import { publicImageRoutes } from './public/image-routes';
 import { publicIssuerRoutes } from './public/issuer-routes';
 import { createNotFoundHandler, publicPages } from './public/routes';
@@ -75,6 +76,9 @@ export async function buildApp({
         upgradeInsecureRequests: isHttps ? [] : null,
       },
     },
+    // No referrer to other sites. Same-origin requests keep theirs, so browsers send a real
+    // Origin header on the app's own form posts and fetches (with no-referrer they send "null").
+    referrerPolicy: { policy: 'same-origin' },
     // HSTS only when served over HTTPS (nginx may also set it).
     strictTransportSecurity: isHttps ? { maxAge: 31_536_000, includeSubDomains: true } : false,
   });
@@ -87,6 +91,7 @@ export async function buildApp({
     await app.register(apiV1, { services, prefix: '/api/v1' });
     await app.register(publicIssuerRoutes, { services, assets });
     await app.register(publicImageRoutes, { services });
+    await app.register(publicCredentialRoutes, { services, assets });
   }
   await app.register(webApp, { webDistDir: config.webDistDir });
   app.setNotFoundHandler(createNotFoundHandler({ config, assets }));
