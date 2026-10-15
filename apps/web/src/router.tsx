@@ -21,6 +21,8 @@ import {
   VerifyEmailPage,
 } from './pages/account-links';
 import { AccountSettingsPage } from './pages/account-settings';
+import { AchievementEditorPage } from './pages/achievement-editor';
+import { AchievementsPage } from './pages/achievements';
 import { InvitePage } from './pages/invite';
 import { LoginPage } from './pages/login';
 import { NewOrgPage } from './pages/new-org';
@@ -214,6 +216,40 @@ const orgIssuerRoute = createRoute({
   },
 });
 
+const achievementsRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: '/achievements',
+  component: function Achievements() {
+    return <AchievementsPage orgId={useOrgId()} />;
+  },
+});
+
+const newAchievementRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: '/achievements/new',
+  component: function NewAchievement() {
+    return <AchievementEditorPage orgId={useOrgId()} />;
+  },
+});
+
+const achievementRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: '/achievements/$achievementId',
+  validateSearch: z.object({ created: z.boolean().optional() }),
+  component: function EditAchievement() {
+    const { achievementId } = achievementRoute.useParams();
+    const { created } = achievementRoute.useSearch();
+    return (
+      <AchievementEditorPage
+        key={achievementId}
+        orgId={useOrgId()}
+        achievementId={achievementId}
+        created={created}
+      />
+    );
+  },
+});
+
 const orgMembersRoute = createRoute({
   getParentRoute: () => orgRoute,
   path: '/members',
@@ -265,7 +301,15 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     appIndexRoute,
     newOrgRoute,
-    orgRoute.addChildren([orgOverviewRoute, orgIssuerRoute, orgMembersRoute, orgSettingsRoute]),
+    orgRoute.addChildren([
+      orgOverviewRoute,
+      achievementsRoute,
+      newAchievementRoute,
+      achievementRoute,
+      orgIssuerRoute,
+      orgMembersRoute,
+      orgSettingsRoute,
+    ]),
     accountRoute,
     twoFactorSetupRoute,
     platformRoute,

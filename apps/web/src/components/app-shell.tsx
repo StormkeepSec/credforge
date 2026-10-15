@@ -2,6 +2,7 @@ import type { MeResponse } from '@credforge/contracts';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import {
+  Award,
   BadgeCheck,
   Building2,
   LayoutDashboard,
@@ -27,6 +28,7 @@ const navLink =
 function OrgNav({ orgId, onNavigate }: { orgId: string; onNavigate: () => void }) {
   const items = [
     { to: '/app/orgs/$orgId', label: 'Overview', icon: LayoutDashboard, exact: true },
+    { to: '/app/orgs/$orgId/achievements', label: 'Achievements', icon: Award },
     { to: '/app/orgs/$orgId/issuer', label: 'Issuer profile', icon: BadgeCheck },
     { to: '/app/orgs/$orgId/members', label: 'Members', icon: Users },
     { to: '/app/orgs/$orgId/settings', label: 'Organization settings', icon: Settings },

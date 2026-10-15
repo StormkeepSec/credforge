@@ -45,6 +45,8 @@ export type ProblemCode =
   | 'bad_origin'
   | 'file_too_large'
   | 'unsupported_file'
+  | 'issuer_not_ready'
+  | 'achievement_not_active'
   | 'internal_error';
 
 export interface Problem {
@@ -132,6 +134,162 @@ export const platformDecisionInput = z.object({ reason: optionalText(1000).optio
 export type PlatformDecisionInput = z.input<typeof platformDecisionInput>;
 
 export const platformOrgsQuery = z.object({ status: z.enum(ORG_STATUSES).optional() });
+
+// ---- achievements ----
+
+/** OB 3.0 `AchievementType` values (spec B.2.1). `ext:` types are allowed too. */
+export const ACHIEVEMENT_TYPES = [
+  'Achievement',
+  'ApprenticeshipCertificate',
+  'Assessment',
+  'Assignment',
+  'AssociateDegree',
+  'Award',
+  'Badge',
+  'BachelorDegree',
+  'Certificate',
+  'CertificateOfCompletion',
+  'Certification',
+  'CommunityService',
+  'Competency',
+  'Course',
+  'CoCurricular',
+  'Degree',
+  'Diploma',
+  'DoctoralDegree',
+  'Fieldwork',
+  'GeneralEducationDevelopment',
+  'JourneymanCertificate',
+  'LearningProgram',
+  'License',
+  'Membership',
+  'ProfessionalDoctorate',
+  'QualityAssuranceCredential',
+  'MasterCertificate',
+  'MasterDegree',
+  'MicroCredential',
+  'ResearchDoctorate',
+  'SecondarySchoolDiploma',
+] as const;
+
+/** OB 3.0 `AlignmentTargetType` values (spec B.2.2). */
+export const ALIGNMENT_TARGET_TYPES = [
+  'ceasn:Competency',
+  'ceterms:Credential',
+  'CFItem',
+  'CFRubric',
+  'CFRubricCriterion',
+  'CFRubricCriterionLevel',
+  'CTDL',
+] as const;
+
+/** Human labels for the achievement types, e.g. `CertificateOfCompletion` → `Certificate of completion`. */
+export function achievementTypeLabel(type: string): string {
+  if (type.startsWith('ext:')) return type.slice(4);
+  const words = type
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+const EXTENSION_TYPE = /^ext:[A-Za-z0-9.\-_|]+$/;
+
+export const achievementTypeField = z
+  .string()
+  .trim()
+  .refine(
+    (value) =>
+      (ACHIEVEMENT_TYPES as readonly string[]).includes(value) || EXTENSION_TYPE.test(value),
+    'Choose a type',
+  );
+
+/** An absolute http(s) URL. */
+const webUrl = z
+  .string()
+  .trim()
+  .min(1, 'Required')
+  .max(2000, 'At most 2000 characters')
+  .refine((value) => {
+    try {
+      const url = new URL(value);
+      return (url.protocol === 'https:' || url.protocol === 'http:') && url.hostname.includes('.');
+    } catch {
+      return false;
+    }
+  }, 'Enter a full web address, e.g. https://example.org');
+
+export const alignmentInput = z.object({
+  targetName: text(200),
+  targetUrl: webUrl,
+  targetDescription: optionalText(1000).optional(),
+  targetFramework: optionalText(200).optional(),
+  targetCode: optionalText(100).optional(),
+  targetType: z
+    .string()
+    .trim()
+    .refine(
+      (value) =>
+        value === '' ||
+        (ALIGNMENT_TARGET_TYPES as readonly string[]).includes(value) ||
+        EXTENSION_TYPE.test(value),
+      'Choose a type',
+    )
+    .transform((value) => (value === '' ? null : value))
+    .optional(),
+});
+export type AlignmentInput = z.input<typeof alignmentInput>;
+
+const tag = z.string().trim().min(1).max(60, 'Each tag can have at most 60 characters');
+
+const achievementFields = {
+  name: text(200),
+  description: text(4000),
+  /** What the recipient did to earn it. Markdown is allowed (OB 3.0 `Criteria.narrative`). */
+  criteriaNarrative: optionalText(10_000).optional(),
+  /** A page that describes the criteria. */
+  criteriaUrl: optionalWebUrl.optional(),
+  achievementType: achievementTypeField.optional(),
+  tags: z
+    .array(tag)
+    .max(20, 'At most 20 tags')
+    .transform((tags) => [...new Set(tags)])
+    .optional(),
+  alignments: z.array(alignmentInput).max(20, 'At most 20 alignments').optional(),
+  /** Credentials expire this many days after they are issued; null means they don't expire. */
+  validForDays: z
+    .number({ error: 'Enter a number of days' })
+    .int('Enter a whole number of days')
+    .min(1, 'At least 1 day')
+    .max(36_500, 'At most 100 years')
+    .nullable()
+    .optional(),
+};
+
+function requireCriteria(
+  value: { criteriaNarrative?: string | null; criteriaUrl?: string | null },
+  ctx: z.RefinementCtx,
+) {
+  if (!value.criteriaNarrative && !value.criteriaUrl) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['criteriaNarrative'],
+      message: 'Describe how it is earned, or link to a page that does',
+    });
+  }
+}
+
+export const achievementInput = z.object(achievementFields).superRefine(requireCriteria);
+export type AchievementInputBody = z.input<typeof achievementInput>;
+
+/** A partial update. The criteria rule is checked against the merged result on the server. */
+export const updateAchievementInput = z.object(achievementFields).partial();
+export type UpdateAchievementInput = z.input<typeof updateAchievementInput>;
+
+export const ACHIEVEMENT_STATUSES = ['draft', 'active', 'archived'] as const;
+export type AchievementStatus = (typeof ACHIEVEMENT_STATUSES)[number];
+
+export const achievementsQuery = z.object({ status: z.enum(ACHIEVEMENT_STATUSES).optional() });
 
 export const auditEventsQuery = z.object({
   before: z.coerce.number().int().positive().optional(),
@@ -271,6 +429,46 @@ export interface PlatformOrg extends OrgSummary {
   requestedBy: { name: string; email: string } | null;
   memberCount: number;
   issuers: { id: string; name: string; website: string | null }[];
+}
+
+export interface Alignment {
+  targetName: string;
+  targetUrl: string;
+  targetDescription: string | null;
+  targetFramework: string | null;
+  targetCode: string | null;
+  targetType: string | null;
+}
+
+export interface Achievement {
+  id: string;
+  /** The permanent id embedded in credentials: `{PUBLIC_BASE_URL}/achievements/{id}`. */
+  url: string;
+  issuerId: string;
+  name: string;
+  description: string;
+  criteriaNarrative: string | null;
+  criteriaUrl: string | null;
+  achievementType: string;
+  tags: string[];
+  alignments: Alignment[];
+  validForDays: number | null;
+  image: ImageSet | null;
+  /** Increases with every saved change; credentials record the revision they were issued with. */
+  revision: number;
+  status: AchievementStatus;
+  /** Credentials issued from it. */
+  awardedCount: number;
+  publishedAt: string | null;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AchievementRevision {
+  revision: number;
+  createdAt: string;
+  createdBy: { id: string; name: string } | null;
 }
 
 export interface AuditEvent {

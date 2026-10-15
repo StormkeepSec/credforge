@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { achievementRoutes } from '../achievements/routes';
 import { auditRoutes } from '../audit/routes';
 import { issuerRoutes } from '../issuers/routes';
 import { meRoutes } from '../me/routes';
@@ -54,6 +55,7 @@ export const apiV1: FastifyPluginAsync<{ services: Services }> = async (app, { s
       await scoped.register(memberRoutes, { services });
       await scoped.register(invitationRoutes, { services });
       await scoped.register(issuerRoutes, { services });
+      await scoped.register(achievementRoutes, { services });
       await scoped.register(auditRoutes, { services });
     },
     { prefix: '/orgs/:orgId' },

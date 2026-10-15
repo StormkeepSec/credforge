@@ -1,4 +1,6 @@
 import type {
+  Achievement,
+  AchievementStatus,
   AuditEventPage,
   InstanceInfo,
   Invitation,
@@ -106,6 +108,19 @@ export const queries = {
       queryKey: ['invitation', token],
       queryFn: () => api<InvitationPreview>(`/invitations/${encodeURIComponent(token)}`),
       retry: false,
+    }),
+  achievements: (orgId: string, status?: AchievementStatus) =>
+    queryOptions({
+      queryKey: ['org', orgId, 'achievements', status ?? 'all'],
+      queryFn: () =>
+        api<{ achievements: Achievement[] }>(
+          `/orgs/${orgId}/achievements${status ? `?status=${status}` : ''}`,
+        ),
+    }),
+  achievement: (orgId: string, achievementId: string) =>
+    queryOptions({
+      queryKey: ['org', orgId, 'achievement', achievementId],
+      queryFn: () => api<Achievement>(`/orgs/${orgId}/achievements/${achievementId}`),
     }),
   platformOrgs: (status: OrgStatus | 'all') =>
     queryOptions({

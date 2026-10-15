@@ -1,4 +1,13 @@
-import { auditEvent, eq, file, invitation, issuer, member, organization } from '@credforge/db';
+import {
+  achievement,
+  auditEvent,
+  eq,
+  file,
+  invitation,
+  issuer,
+  member,
+  organization,
+} from '@credforge/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pngWithMetadata } from '../support/images';
 import { lastEmailTo, linkIn, newUser, type TestClient } from './support/client';
@@ -18,6 +27,7 @@ interface Tenant {
   issuerId: string;
   memberId: string;
   invitationId: string;
+  achievementId: string;
 }
 
 let png: Buffer;
@@ -53,8 +63,16 @@ async function tenant(name: string): Promise<Tenant> {
   });
   const invitationId = (invited.json() as { id: string }).id;
 
+  const draft = await owner.post(`/api/v1/orgs/${orgId}/achievements`, {
+    name: `${name} Badge`,
+    description: 'A badge.',
+    criteriaNarrative: 'Earn it.',
+  });
+  const achievementId = (draft.json() as { id: string }).id;
+  await owner.upload(`/api/v1/orgs/${orgId}/achievements/${achievementId}/image`, png, 'image/png');
+  await owner.post(`/api/v1/orgs/${orgId}/achievements/${achievementId}/publish`);
   await owner.upload(`/api/v1/orgs/${orgId}/issuers/${issuerId}/logo`, png, 'image/png');
-  return { owner, orgId, issuerId, memberId, invitationId };
+  return { owner, orgId, issuerId, memberId, invitationId, achievementId };
 }
 
 beforeAll(async () => {
@@ -73,7 +91,7 @@ interface Case {
   route: string;
   body?: unknown;
   /** Has an id of a resource inside the org. */
-  resource?: 'memberId' | 'invitationId' | 'issuerId';
+  resource?: 'memberId' | 'invitationId' | 'issuerId' | 'achievementId';
   /** Sends an image file as the body (uploads). */
   upload?: true;
 }
@@ -100,6 +118,30 @@ const CASES: Case[] = [
   { method: 'GET', route: '/audit-events' },
   { method: 'PUT', route: '/issuers/:issuerId/logo', resource: 'issuerId', upload: true },
   { method: 'DELETE', route: '/issuers/:issuerId/logo', resource: 'issuerId' },
+  { method: 'GET', route: '/achievements' },
+  {
+    method: 'POST',
+    route: '/achievements',
+    body: { name: 'Intruder', description: 'x', criteriaNarrative: 'x' },
+  },
+  { method: 'GET', route: '/achievements/:achievementId', resource: 'achievementId' },
+  {
+    method: 'PATCH',
+    route: '/achievements/:achievementId',
+    resource: 'achievementId',
+    body: { name: 'Hijacked' },
+  },
+  { method: 'DELETE', route: '/achievements/:achievementId', resource: 'achievementId' },
+  {
+    method: 'PUT',
+    route: '/achievements/:achievementId/image',
+    resource: 'achievementId',
+    upload: true,
+  },
+  { method: 'POST', route: '/achievements/:achievementId/publish', resource: 'achievementId' },
+  { method: 'POST', route: '/achievements/:achievementId/archive', resource: 'achievementId' },
+  { method: 'POST', route: '/achievements/:achievementId/restore', resource: 'achievementId' },
+  { method: 'GET', route: '/achievements/:achievementId/revisions', resource: 'achievementId' },
 ];
 
 /** Sends a case as `client`: JSON, or an image upload. */
@@ -113,7 +155,8 @@ function url(orgId: string, route: string, ids: Partial<Tenant>) {
   return `/api/v1/orgs/${orgId}${route}`
     .replace(':memberId', ids.memberId ?? '')
     .replace(':invitationId', ids.invitationId ?? '')
-    .replace(':issuerId', ids.issuerId ?? '');
+    .replace(':issuerId', ids.issuerId ?? '')
+    .replace(':achievementId', ids.achievementId ?? '');
 }
 
 /** Everything of org B's that an intruder might change. */
@@ -123,6 +166,10 @@ async function snapshotB() {
     issuers: await env.ownerDb.select().from(issuer).where(eq(issuer.orgId, b.orgId)),
     members: await env.ownerDb.select().from(member).where(eq(member.orgId, b.orgId)),
     invitations: await env.ownerDb.select().from(invitation).where(eq(invitation.orgId, b.orgId)),
+    achievements: await env.ownerDb
+      .select()
+      .from(achievement)
+      .where(eq(achievement.orgId, b.orgId)),
     files: await env.ownerDb.select().from(file).where(eq(file.orgId, b.orgId)),
   };
 }
@@ -159,7 +206,7 @@ describe('cross-tenant access', () => {
   });
 
   it("never lists another org's data", async () => {
-    const bIds = [b.orgId, b.issuerId, b.memberId, b.invitationId];
+    const bIds = [b.orgId, b.issuerId, b.memberId, b.invitationId, b.achievementId];
     for (const test of CASES.filter((item) => item.method === 'GET' && !item.resource)) {
       const response = await a.owner.get(url(a.orgId, test.route, a));
       expect(response.statusCode, test.route).toBe(200);
