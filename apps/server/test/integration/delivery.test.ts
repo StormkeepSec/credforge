@@ -66,6 +66,23 @@ async function jobs(): Promise<{ data: EmailMessage }[]> {
   return result.rows as { data: EmailMessage }[];
 }
 
+async function jobsTo(email: string) {
+  return (await jobs()).filter((row) => row.data.to === email);
+}
+
+/** Runs `body` while every job insert waits on a lock, as on a slow or busy database. */
+async function holdingJobInserts<T>(body: () => Promise<T>): Promise<T> {
+  const lock = await env.ownerPool.connect();
+  try {
+    await lock.query('begin');
+    await lock.query('lock table pgboss.job in exclusive mode');
+    return await body();
+  } finally {
+    await lock.query('rollback');
+    lock.release();
+  }
+}
+
 async function awardTo(email: string) {
   const response = await owner.post(`/api/v1/orgs/${orgId}/credentials`, {
     achievementId,
@@ -112,6 +129,21 @@ describe('the award email job', () => {
     });
     expect(response.statusCode).toBe(400);
     expect((await jobs()).length).toBe(before);
+  });
+});
+
+describe('email sent in the background', () => {
+  // Sign-up doesn't wait for its verification email to be enqueued. The test outbox must still
+  // have the message when sign-up answers: newUser reads the link from it, and failed this file's
+  // setup on busy machines when the outbox only recorded a message once its job was written.
+  it("doesn't hold up sign-up, and its job is written after", async () => {
+    const client = await holdingJobInserts(async () => {
+      const signedUp = await newUser(env, { twoFactor: false });
+      expect(await jobsTo(signedUp.email)).toEqual([]);
+      return signedUp;
+    });
+    await expect.poll(async () => (await jobsTo(client.email)).length).toBe(1);
+    expect((await jobsTo(client.email))[0]?.data.kind).toBe('verify-email');
   });
 });
 

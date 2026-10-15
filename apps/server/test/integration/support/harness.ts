@@ -88,14 +88,21 @@ export async function createTestEnvironment(
     boss = createQueueClient(appUrl, { applicationName: 'credforge-test-queue', worker: false });
     await boss.start();
   }
-  // With the queue, messages are enqueued for real and also kept in memory for assertions.
+  // With the queue, messages are enqueued for real and also kept in memory for assertions. They are
+  // kept as soon as the app hands them over, as the memory outbox does: auth sends email in the
+  // background, so sign-up can answer before the job is written, and a test reads the link next.
   const queue = boss ? createQueueOutbox(boss) : undefined;
   const outbox: EmailOutbox & { messages: EmailMessage[] } = queue
     ? {
         messages: memory.messages,
         async send(message, options) {
-          await queue.send(message, options);
           memory.messages.push(message);
+          try {
+            await queue.send(message, options);
+          } catch (error) {
+            memory.messages.splice(memory.messages.indexOf(message), 1);
+            throw error;
+          }
         },
       }
     : memory;
