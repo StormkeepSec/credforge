@@ -1,5 +1,6 @@
 import type { OrgStatus } from '@credforge/contracts';
-import { SitePage } from '../components/site-chrome';
+import { OrgStatusNotice } from '../components/org-notice';
+import { ReportProblem, SitePage, websiteLabel } from '../components/site-chrome';
 import { Document } from '../document';
 
 export interface IssuerPageProps {
@@ -12,25 +13,14 @@ export interface IssuerPageProps {
     email: string | null;
     /** 512 px logo. */
     logoUrl: string | null;
+    /** The website's host when the issuer proved it controls it (§6.3). */
+    verifiedHost: string | null;
   };
+  /** Where "Report a problem" goes; unset hides it. */
+  reportEmail?: string;
   orgStatus: OrgStatus;
   keyCount: number;
 }
-
-const notices: Partial<Record<OrgStatus, { title: string; body: string }>> = {
-  pending: {
-    title: 'Not reviewed yet',
-    body: 'This organization is new and has not been approved by the people who run this credforge site yet.',
-  },
-  suspended: {
-    title: 'Suspended',
-    body: 'This organization is suspended and cannot award badges. Badges it awarded earlier can still be checked.',
-  },
-  declined: {
-    title: 'Not approved',
-    body: 'This organization was not approved to award badges on this credforge site.',
-  },
-};
 
 function initials(name: string): string {
   const letters = name
@@ -43,12 +33,18 @@ function initials(name: string): string {
 
 /**
  * The human view of an issuer's permanent URL. The same URL serves the issuer profile JSON to
- * verifiers (content negotiation). Wording stays factual: the website is self-reported until
- * domain verification exists (design plan §6.3).
+ * verifiers (content negotiation). Wording stays factual: the website is "verified" only when
+ * the issuer proved it controls the domain, and "self-reported" otherwise (design plan §6.3).
  */
-export function IssuerPage({ url, stylesheet, issuer, orgStatus, keyCount }: IssuerPageProps) {
-  const notice = notices[orgStatus];
-  const websiteHost = issuer.website ? new URL(issuer.website).host : null;
+export function IssuerPage({
+  url,
+  stylesheet,
+  issuer,
+  orgStatus,
+  keyCount,
+  reportEmail,
+}: IssuerPageProps) {
+  const website = issuer.website ? websiteLabel(issuer.website, issuer.verifiedHost) : null;
   return (
     <Document
       title={`${issuer.name} · Issuer on credforge`}
@@ -82,15 +78,7 @@ export function IssuerPage({ url, stylesheet, issuer, orgStatus, keyCount }: Iss
             </h1>
           </div>
 
-          {notice && (
-            <div
-              role="note"
-              className="mt-8 rounded-lg border border-warning/40 bg-warning/5 p-4 text-ink"
-            >
-              <p className="font-semibold">{notice.title}</p>
-              <p className="mt-1 text-sm text-ink-muted">{notice.body}</p>
-            </div>
-          )}
+          <OrgStatusNotice status={orgStatus} subject="issuer" />
 
           {issuer.description && (
             <p className="mt-8 text-lg leading-relaxed whitespace-pre-line text-ink-muted">
@@ -99,17 +87,24 @@ export function IssuerPage({ url, stylesheet, issuer, orgStatus, keyCount }: Iss
           )}
 
           <dl className="mt-10 grid gap-6 border-t border-ink/10 pt-8 sm:grid-cols-2">
-            {issuer.website && websiteHost && (
+            {issuer.website && website && (
               <div>
-                <dt className="text-sm font-semibold text-ink-muted">Website (self-reported)</dt>
+                <dt className="text-sm font-semibold text-ink-muted">
+                  {website.verified ? 'Website verified' : 'Website (self-reported)'}
+                </dt>
                 <dd className="mt-1">
                   <a
                     href={issuer.website}
                     rel="nofollow noopener noreferrer"
                     className="font-semibold text-signal-strong underline underline-offset-4"
                   >
-                    {websiteHost}
+                    {website.host}
                   </a>
+                </dd>
+                <dd className="mt-1 text-sm text-ink-muted">
+                  {website.verified
+                    ? 'The issuer proved it controls this domain.'
+                    : 'The issuer hasn’t proved it controls this domain.'}
                 </dd>
               </div>
             )}
@@ -136,7 +131,10 @@ export function IssuerPage({ url, stylesheet, issuer, orgStatus, keyCount }: Iss
               </dd>
             </div>
           </dl>
-          <p className="mt-12 text-sm text-ink-muted">Hosted on credforge.</p>
+          <div className="mt-12 grid gap-2">
+            <p className="text-sm text-ink-muted">Hosted on credforge.</p>
+            <ReportProblem email={reportEmail} pageUrl={url} />
+          </div>
         </section>
       </SitePage>
     </Document>

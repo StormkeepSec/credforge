@@ -4,6 +4,7 @@ import type { Config } from './config';
 import type { KeyEncryption } from './crypto/key-encryption';
 import type { EmailOutbox } from './email/outbox';
 import type { Storage } from './files/storage';
+import type { DomainChecker } from './issuers/domain';
 import type { JobQueue } from './jobs/enqueue';
 
 /** What the HTTP routes need. Built once in server.ts; tests build their own. */
@@ -19,4 +20,6 @@ export interface Services {
    * themselves (the database records what is pending, and the worker's sweep finds it too).
    */
   jobs?: JobQueue;
+  /** Looks up issuers' DNS records and verification files; tests pass a stand-in. */
+  domains?: DomainChecker;
 }

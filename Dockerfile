@@ -11,8 +11,9 @@ ENV PNPM_HOME=/pnpm \
 RUN corepack enable
 WORKDIR /repo
 
-# Manifests first so dependency installation is cached across source changes.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# Manifests first so dependency installation is cached across source changes. The pnpm hooks
+# (.pnpmfile.cjs) keep better-auth's optional peers vitest and drizzle-kit out of production.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .pnpmfile.cjs ./
 COPY scripts/ scripts/
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
@@ -28,6 +29,9 @@ RUN pnpm --filter @credforge/web --filter @credforge/server run build
 # Production dependencies of the server only; workspace packages are already bundled into dist.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm --filter @credforge/server deploy --prod --legacy /out
+# Type declarations and the dependencies' source maps (about 65 MB) are never loaded at runtime.
+RUN find /out/node_modules -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' \
+      -o -name '*.js.map' -o -name '*.mjs.map' -o -name '*.cjs.map' \) -delete
 
 # ---- runtime ----
 FROM ${NODE_IMAGE} AS runtime

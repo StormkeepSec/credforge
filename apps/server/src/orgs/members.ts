@@ -4,7 +4,13 @@ import type { FastifyPluginAsync } from 'fastify';
 import { ApiError, forbidden, notFound, parse, uuidParam } from '../api/errors';
 import { recordAudit } from '../audit/audit';
 import type { Services } from '../services';
-import { orgAccessOf, requestInfo, requirePermission, requireWritable, userActor } from './access';
+import {
+  orgAccessOf,
+  requestInfo,
+  requireMember,
+  requirePermission,
+  requireWritable,
+} from './access';
 import { countOwners, lockOrg } from './service';
 
 async function findMember(tx: Queryable, orgId: string, memberId: string) {
@@ -61,7 +67,7 @@ export const memberRoutes: FastifyPluginAsync<{ services: Services }> = async (
   });
 
   app.patch('/members/:memberId', async (request) => {
-    const access = requirePermission(request, 'member:manage');
+    const access = requireMember(requirePermission(request, 'member:manage'));
     requireWritable(access);
     const memberId = uuidParam((request.params as { memberId?: string }).memberId, 'Member');
     const { role } = parse(updateMemberInput, request.body);
@@ -70,7 +76,7 @@ export const memberRoutes: FastifyPluginAsync<{ services: Services }> = async (
       await lockOrg(tx, access.org.id);
       const target = await findMember(tx, access.org.id, memberId);
       if (target.role === role) return;
-      if (!canManageMember(access.role, target.role, role)) throw forbidden();
+      if (!canManageMember(access.member.role, target.role, role)) throw forbidden();
       if (target.role === 'owner' && (await countOwners(tx, access.org.id)) <= 1) {
         throw lastOwner();
       }
@@ -80,7 +86,7 @@ export const memberRoutes: FastifyPluginAsync<{ services: Services }> = async (
         .where(and(eq(member.orgId, access.org.id), eq(member.id, memberId)));
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'member.role_changed',
         target: { type: 'member', id: memberId },
         data: { userId: target.userId, email: target.email, from: target.role, to: role },
@@ -92,9 +98,9 @@ export const memberRoutes: FastifyPluginAsync<{ services: Services }> = async (
 
   /** Removes a member. Anyone may remove themselves (leave), except the last owner. */
   app.delete('/members/:memberId', async (request, reply) => {
-    const access = orgAccessOf(request);
+    const access = requireMember(orgAccessOf(request));
     const memberId = uuidParam((request.params as { memberId?: string }).memberId, 'Member');
-    const leaving = memberId === access.memberId;
+    const leaving = memberId === access.member.id;
     if (!leaving) {
       requirePermission(request, 'member:manage');
       requireWritable(access);
@@ -103,14 +109,14 @@ export const memberRoutes: FastifyPluginAsync<{ services: Services }> = async (
     await db.transaction(async (tx) => {
       await lockOrg(tx, access.org.id);
       const target = await findMember(tx, access.org.id, memberId);
-      if (!leaving && !canManageMember(access.role, target.role)) throw forbidden();
+      if (!leaving && !canManageMember(access.member.role, target.role)) throw forbidden();
       if (target.role === 'owner' && (await countOwners(tx, access.org.id)) <= 1) {
         throw lastOwner();
       }
       await tx.delete(member).where(and(eq(member.orgId, access.org.id), eq(member.id, memberId)));
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: leaving ? 'member.left' : 'member.removed',
         target: { type: 'member', id: memberId },
         data: { userId: target.userId, email: target.email, role: target.role },

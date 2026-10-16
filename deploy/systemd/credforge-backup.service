@@ -1,0 +1,16 @@
+# Nightly credforge database backup (deploy/backup.sh). Install on the droplet:
+#   sudo cp deploy/systemd/credforge-backup.* /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now credforge-backup.timer
+# Adjust WorkingDirectory if credforge isn't in /opt/credforge. Logs: journalctl -u credforge-backup
+[Unit]
+Description=credforge database backup to the backups bucket
+Wants=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/credforge
+Environment=CREDFORGE_DIR=/opt/credforge
+ExecStart=/usr/bin/bash /opt/credforge/deploy/backup.sh
+TimeoutStartSec=1h
+Nice=10

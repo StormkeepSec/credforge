@@ -30,7 +30,7 @@ import {
   deliveryStatus,
   emailsFor,
 } from '../credentials/service';
-import { requestInfo, requirePermission, userActor } from '../orgs/access';
+import { requestInfo, requirePermission } from '../orgs/access';
 import type { Services } from '../services';
 
 const PAGE = 500;
@@ -205,7 +205,7 @@ export const exportRoutes: FastifyPluginAsync<{ services: Services }> = async (
     const extra = await customKeys(db, access.org.id, filters);
     await recordAudit(db, {
       orgId: access.org.id,
-      actor: userActor(access.actor),
+      actor: access.actor,
       action: 'credentials.exported',
       data: { format: 'csv', filters },
       request: requestInfo(request),
@@ -232,7 +232,7 @@ export const exportRoutes: FastifyPluginAsync<{ services: Services }> = async (
     const filters = parse(credentialFilters, request.query);
     await recordAudit(db, {
       orgId: access.org.id,
-      actor: userActor(access.actor),
+      actor: access.actor,
       action: 'credentials.exported',
       data: { format: 'jsonl', filters },
       request: requestInfo(request),
@@ -272,7 +272,7 @@ export const exportRoutes: FastifyPluginAsync<{ services: Services }> = async (
     const access = requirePermission(request, 'audit:read');
     await recordAudit(db, {
       orgId: access.org.id,
-      actor: userActor(access.actor),
+      actor: access.actor,
       action: 'audit.exported',
       data: { format: 'csv' },
       request: requestInfo(request),
@@ -315,7 +315,7 @@ export const exportRoutes: FastifyPluginAsync<{ services: Services }> = async (
     const access = requirePermission(request, 'audit:read');
     await recordAudit(db, {
       orgId: access.org.id,
-      actor: userActor(access.actor),
+      actor: access.actor,
       action: 'audit.exported',
       data: { format: 'jsonl' },
       request: requestInfo(request),

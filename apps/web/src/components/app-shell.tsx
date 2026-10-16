@@ -6,6 +6,7 @@ import {
   BadgeCheck,
   Building2,
   Inbox,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -36,6 +37,7 @@ function OrgNav({ orgId, onNavigate }: { orgId: string; onNavigate: () => void }
     { to: '/app/orgs/$orgId/issuer', label: 'Issuer profile', icon: BadgeCheck },
     { to: '/app/orgs/$orgId/members', label: 'Members', icon: Users },
     { to: '/app/orgs/$orgId/settings', label: 'Organization settings', icon: Settings },
+    { to: '/app/orgs/$orgId/api-keys', label: 'API keys', icon: KeyRound },
   ] as const;
   return (
     <ul className="grid gap-1">

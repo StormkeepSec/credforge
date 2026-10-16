@@ -4,6 +4,7 @@ import {
   type BatchDetails,
   type BatchPage,
   type BatchRowPage,
+  batchCsvQuery,
   batchesQuery,
   batchRowsQuery,
   createBatchFromRowsInput,
@@ -13,7 +14,7 @@ import { and, asc, desc, eq, gt, issuanceBatch, issuanceBatchRow, lt, or } from 
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { ApiError, parse, uuidParam } from '../api/errors';
-import { requestInfo, requirePermission, requireWritable, userActor } from '../orgs/access';
+import { requestInfo, requirePermission, requireWritable } from '../orgs/access';
 import type { Services } from '../services';
 import { TEMPLATE_CSV } from './csv';
 import {
@@ -35,11 +36,6 @@ const CSV_CONTENT_TYPES = ['text/csv', 'application/csv', 'application/vnd.ms-ex
 
 const idOf = (request: FastifyRequest) =>
   uuidParam((request.params as { batchId?: string }).batchId, 'Batch');
-
-const csvUploadQuery = z.object({
-  achievementId: z.uuid('Choose an achievement'),
-  fileName: z.string().trim().max(200).optional(),
-});
 
 function parseCursor(value: string | undefined): { at: Date; id: string } | undefined {
   if (!value) return undefined;
@@ -123,11 +119,11 @@ export const batchRoutes: FastifyPluginAsync<{ services: Services }> = async (
   app.post('/batches', { bodyLimit: BATCH_LIMITS.maxBytes }, async (request, reply) => {
     const access = requirePermission(request, 'credential:issue');
     requireWritable(access);
-    const actor = userActor(access.actor);
+    const actor = access.actor;
     const contentType = (request.headers['content-type'] ?? '').split(';')[0]?.trim() ?? '';
     let id: string;
     if (CSV_CONTENT_TYPES.includes(contentType)) {
-      const query = parse(csvUploadQuery, request.query);
+      const query = parse(batchCsvQuery, request.query);
       const bytes = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
       if (bytes.length === 0) {
         throw new ApiError(400, 'invalid_csv', 'Can’t use this file', 'The file is empty.');
@@ -168,13 +164,7 @@ export const batchRoutes: FastifyPluginAsync<{ services: Services }> = async (
   app.delete('/batches/:batchId', async (request, reply) => {
     const access = requirePermission(request, 'credential:issue');
     requireWritable(access);
-    await deleteBatch(
-      services,
-      access.org.id,
-      idOf(request),
-      userActor(access.actor),
-      requestInfo(request),
-    );
+    await deleteBatch(services, access.org.id, idOf(request), access.actor, requestInfo(request));
     return reply.code(204).send();
   });
 
@@ -183,13 +173,7 @@ export const batchRoutes: FastifyPluginAsync<{ services: Services }> = async (
     const access = requirePermission(request, 'credential:issue');
     requireWritable(access);
     const batchId = idOf(request);
-    await confirmBatch(
-      services,
-      access.org.id,
-      batchId,
-      userActor(access.actor),
-      requestInfo(request),
-    );
+    await confirmBatch(services, access.org.id, batchId, access.actor, requestInfo(request));
     return loadBatchDetails(db, config, access.org.id, batchId);
   });
 

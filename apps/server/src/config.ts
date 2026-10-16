@@ -15,6 +15,9 @@ const DEVELOPMENT_DEFAULTS: Record<string, string> = {
   MIGRATION_DATABASE_URL: 'postgres://credforge:credforge@localhost:5432/credforge',
   EMAIL_TRANSPORT: 'smtp',
   SMTP_URL: 'smtp://localhost:1025', // Mailpit (compose.dev.yml)
+  // So the report link, security.txt and the legal pages' contacts show in development.
+  ABUSE_EMAIL: 'abuse@credforge.test',
+  SECURITY_EMAIL: 'security@credforge.test',
 };
 
 /** Used outside production when the variable isn't set. Never valid in production. */
@@ -71,7 +74,7 @@ const postgresUrl = z
   .regex(/^postgres(ql)?:\/\//, 'must be a postgres:// connection string');
 
 /** 32 bytes as base64, base64url or hex, e.g. the output of `openssl rand -base64 32`. */
-const masterKey = z
+export const masterKey = z
   .string()
   .trim()
   .transform((value, ctx) => {
@@ -149,6 +152,22 @@ const envSchema = z
       .int('must be a whole number')
       .min(0, 'must be 0 (no limit) or more')
       .default(20),
+    API_RATE_LIMIT: z.coerce
+      .number({ error: 'must be a whole number' })
+      .int('must be a whole number')
+      .min(0, 'must be 0 (no limit) or more')
+      .default(300),
+    CLAIM_RATE_LIMIT: z.coerce
+      .number({ error: 'must be a whole number' })
+      .int('must be a whole number')
+      .min(0, 'must be 0 (no limit) or more')
+      .default(30),
+    AUTH_RATE_LIMIT: z.stringbool().optional(),
+    ABUSE_EMAIL: z.email('must be an email address').optional(),
+    PRIVACY_EMAIL: z.email('must be an email address').optional(),
+    SECURITY_EMAIL: z.email('must be an email address').optional(),
+    OPERATOR_NAME: z.string().trim().max(200).optional(),
+    LEGAL_PAGES_DRAFT: z.stringbool().default(true),
 
     STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
     STORAGE_LOCAL_DIR: z.string().trim().optional(),
@@ -318,6 +337,22 @@ export interface Config {
   defaultOrgDailySendLimit: number;
   /** Verifications (the /verify page and POST /api/v1/verify) per client IP per minute; 0 = no limit. */
   verifyRateLimit: number;
+  /** Requests per API key per minute; 0 = no limit. */
+  apiRateLimit: number;
+  /** Claim and invitation links opened per client IP per minute; 0 = no limit. */
+  claimRateLimit: number;
+  /** Better Auth's sign-in, sign-up, reset and second-factor limits (on in production). */
+  authRateLimit: boolean;
+  /** Where "Report a problem" on public pages goes; unset hides the link. */
+  abuseEmail?: string;
+  /** For privacy requests on /privacy; defaults to the abuse address. */
+  privacyEmail?: string;
+  /** For vulnerability reports: /.well-known/security.txt and the privacy policy. */
+  securityEmail?: string;
+  /** Who runs this instance, as the privacy policy and terms name it. */
+  operatorName?: string;
+  /** The privacy policy and terms are drafts awaiting review: they say so at the top. */
+  legalPagesDraft: boolean;
   storage: StorageConfig;
   oauth: {
     google?: OAuthClient;
@@ -408,6 +443,14 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     },
     defaultOrgDailySendLimit: env.DEFAULT_ORG_DAILY_SEND_LIMIT,
     verifyRateLimit: env.VERIFY_RATE_LIMIT,
+    apiRateLimit: env.API_RATE_LIMIT,
+    claimRateLimit: env.CLAIM_RATE_LIMIT,
+    authRateLimit: env.AUTH_RATE_LIMIT ?? env.NODE_ENV === 'production',
+    abuseEmail: env.ABUSE_EMAIL,
+    privacyEmail: env.PRIVACY_EMAIL ?? env.ABUSE_EMAIL,
+    securityEmail: env.SECURITY_EMAIL,
+    operatorName: env.OPERATOR_NAME,
+    legalPagesDraft: env.LEGAL_PAGES_DRAFT,
     storage:
       env.STORAGE_DRIVER === 's3'
         ? {

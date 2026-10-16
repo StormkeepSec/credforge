@@ -12,6 +12,7 @@ import {
 import {
   achievement,
   and,
+  apiKey,
   asc,
   type BatchColumn,
   type BatchRowIssue,
@@ -178,7 +179,7 @@ export async function createCsvBatch(
         size: input.bytes.length,
         sha256: createHash('sha256').update(input.bytes).digest('hex'),
         visibility: 'private',
-        createdBy: creator.id,
+        createdBy: creator.type === 'user' ? creator.id : null,
       })
       .returning({ id: file.id });
     await tx.insert(issuanceBatch).values({
@@ -568,7 +569,13 @@ export async function confirmBatch(
     const now = new Date();
     await tx
       .update(issuanceBatch)
-      .set({ status: 'queued', confirmedAt: now, confirmedById: actor.id, updatedAt: now })
+      .set({
+        status: 'queued',
+        confirmedAt: now,
+        confirmedByType: actor.type,
+        confirmedById: actor.id,
+        updatedAt: now,
+      })
       .where(eq(issuanceBatch.id, batchId));
     await recordAudit(tx, {
       orgId,
@@ -644,8 +651,20 @@ function isTransient(error: unknown): boolean {
   );
 }
 
+/** Whoever confirmed the batch (a member or an API key): the worker awards on their behalf. */
 async function batchActor(db: Queryable, batch: BatchRecord): Promise<AwardActor> {
-  const id = batch.confirmedById ?? batch.createdById ?? '';
+  const confirmed = batch.confirmedById !== null;
+  const id = (confirmed ? batch.confirmedById : batch.createdById) ?? '';
+  const type = (confirmed ? batch.confirmedByType : batch.createdByType) ?? 'user';
+  if (type === 'api_key') {
+    const [key] = id
+      ? await db
+          .select({ name: apiKey.name, prefix: apiKey.prefix })
+          .from(apiKey)
+          .where(eq(apiKey.id, id))
+      : [];
+    return { type, id, label: key ? `${key.name} (${key.prefix})` : '' };
+  }
   const [row] = id ? await db.select({ email: user.email }).from(user).where(eq(user.id, id)) : [];
   return { type: 'user', id, label: row?.email ?? '' };
 }
@@ -931,15 +950,32 @@ export async function countRows(
 }
 
 async function creatorLabels(db: Queryable, batches: BatchRecord[]): Promise<Map<string, string>> {
-  const ids = [
-    ...new Set(batches.map((batch) => batch.createdById).filter((id): id is string => Boolean(id))),
+  const idsOf = (type: 'user' | 'api_key') => [
+    ...new Set(
+      batches
+        .filter((batch) => batch.createdByType === type)
+        .map((batch) => batch.createdById)
+        .filter((id): id is string => Boolean(id)),
+    ),
   ];
-  if (ids.length === 0) return new Map();
-  const rows = await db
-    .select({ id: user.id, email: user.email })
-    .from(user)
-    .where(inArray(user.id, ids));
-  return new Map(rows.map((row) => [row.id, row.email]));
+  const userIds = idsOf('user');
+  const keyIds = idsOf('api_key');
+  const users = userIds.length
+    ? await db
+        .select({ id: user.id, label: user.email })
+        .from(user)
+        .where(inArray(user.id, userIds))
+    : [];
+  const keys = keyIds.length
+    ? await db
+        .select({ id: apiKey.id, name: apiKey.name, prefix: apiKey.prefix })
+        .from(apiKey)
+        .where(inArray(apiKey.id, keyIds))
+    : [];
+  return new Map([
+    ...users.map((row) => [row.id, row.label] as const),
+    ...keys.map((row) => [row.id, `${row.name} (${row.prefix})`] as const),
+  ]);
 }
 
 export async function serializeBatches(

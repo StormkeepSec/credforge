@@ -6,7 +6,15 @@
 
 name: credforge
 
+# Container logs are rotated (Docker keeps them forever otherwise): at most 5 × 10 MB each.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
 x-app: &app
+  logging: *logging
   image: credforge:${CREDFORGE_VERSION:-latest} # becomes a registry path once the repo is hosted
   build: .
   env_file: .env
@@ -54,8 +62,23 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # Nightly database backups (deploy/backup.sh, deploy/restore.sh). Not a long-running service:
+  # the scripts run it with `docker compose run`. Its bucket key lives in backup.env, which only
+  # this service reads, so the app and worker never hold it.
+  backup:
+    <<: *app
+    profiles: ["backup"]
+    command: ["node", "dist/backup.js", "help"]
+    restart: "no"
+    env_file:
+      - path: .env
+      - path: backup.env
+        required: false
+    environment: {}
+
   db:
     image: postgres:18-alpine
+    logging: *logging
     environment:
       POSTGRES_DB: credforge
       POSTGRES_USER: credforge

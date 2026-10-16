@@ -1,9 +1,15 @@
-import { SitePage } from '../components/site-chrome';
+import type { OrgStatus } from '@credforge/contracts';
+import { OrgStatusNotice } from '../components/org-notice';
+import { ReportProblem, SitePage } from '../components/site-chrome';
 import { Document } from '../document';
 
 export interface AchievementPageProps {
   url: string;
   stylesheet: string;
+  /** Where "Report a problem" goes; unset hides it. */
+  reportEmail?: string;
+  /** The awarding organization's status (new, suspended or declined get a notice). */
+  orgStatus: OrgStatus;
   achievement: {
     name: string;
     description: string;
@@ -37,6 +43,8 @@ export function AchievementPage({
   image,
   ogImage,
   issuer,
+  reportEmail,
+  orgStatus,
 }: AchievementPageProps) {
   return (
     <Document
@@ -49,6 +57,7 @@ export function AchievementPage({
     >
       <SitePage>
         <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
+          <OrgStatusNotice status={orgStatus} subject="badge" className="mb-8" />
           {a.archived && (
             <div role="note" className="mb-8 rounded-lg border border-warning/40 bg-warning/5 p-4">
               <p className="font-semibold">No longer awarded</p>
@@ -172,7 +181,10 @@ export function AchievementPage({
               Achievement ID
             </h2>
             <p className="mt-1 font-mono break-all">{url}</p>
-            <p className="mt-8 text-ink-muted">Hosted on credforge.</p>
+            <div className="mt-8 grid gap-2">
+              <p className="text-ink-muted">Hosted on credforge.</p>
+              <ReportProblem email={reportEmail} pageUrl={url} />
+            </div>
           </section>
         </div>
       </SitePage>

@@ -12,6 +12,7 @@ import { ApiError, forbidden, notFound, parse, uuidParam } from '../api/errors';
 import { recordAudit } from '../audit/audit';
 import { orgApprovedMessage, orgDeclinedMessage, orgSuspendedMessage } from '../email/messages';
 import type { EmailMessage } from '../email/transport';
+import { verifiedHost } from '../issuers/domain';
 import { requestInfo, userActor } from '../orgs/access';
 import { lockOrg, ownerEmails } from '../orgs/service';
 import type { Services } from '../services';
@@ -62,7 +63,14 @@ export const platformRoutes: FastifyPluginAsync<{ services: Services }> = async 
 
     const issuers = orgs.length
       ? await db
-          .select({ id: issuer.id, orgId: issuer.orgId, name: issuer.name, website: issuer.url })
+          .select({
+            id: issuer.id,
+            orgId: issuer.orgId,
+            name: issuer.name,
+            website: issuer.url,
+            domain: issuer.domain,
+            domainVerifiedAt: issuer.domainVerifiedAt,
+          })
           .from(issuer)
           .where(
             inArray(
@@ -85,7 +93,17 @@ export const platformRoutes: FastifyPluginAsync<{ services: Services }> = async 
         memberCount,
         issuers: issuers
           .filter((row) => row.orgId === org.id)
-          .map(({ id, name, website }) => ({ id, name, website })),
+          .map((row) => ({
+            id: row.id,
+            name: row.name,
+            website: row.website,
+            domainVerified:
+              verifiedHost({
+                url: row.website,
+                domain: row.domain,
+                domainVerifiedAt: row.domainVerifiedAt,
+              }) !== null,
+          })),
         dailySendLimit: org.dailySendLimit,
         defaultDailySendLimit: config.defaultOrgDailySendLimit,
       })),

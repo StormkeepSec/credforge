@@ -19,14 +19,21 @@ import {
   type Queryable,
   user,
 } from '@credforge/db';
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthContext } from '../api/auth-context';
 import { requireReadySession } from '../api/auth-context';
 import { ApiError, forbidden, notFound, parse, uuidParam } from '../api/errors';
+import type { RateLimiter } from '../api/rate-limit';
 import { recordAudit } from '../audit/audit';
 import { invitationMessage } from '../email/messages';
 import type { Services } from '../services';
-import { requestInfo, requirePermission, requireWritable, userActor } from './access';
+import {
+  requestInfo,
+  requireMember,
+  requirePermission,
+  requireWritable,
+  userActor,
+} from './access';
 
 export const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -79,7 +86,7 @@ export const invitationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
   const { db } = services;
 
   app.get('/invitations', async (request): Promise<{ invitations: Invitation[] }> => {
-    const access = requirePermission(request, 'member:invite');
+    const access = requireMember(requirePermission(request, 'member:invite'));
     const rows = await db
       .select({
         id: invitation.id,
@@ -108,10 +115,10 @@ export const invitationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
 
   /** Invites someone. Inviting an address that already has an open invitation sends a fresh link. */
   app.post('/invitations', async (request, reply) => {
-    const access = requirePermission(request, 'member:invite');
+    const access = requireMember(requirePermission(request, 'member:invite'));
     requireWritable(access);
     const { email, role } = parse(inviteMemberInput, request.body);
-    if (!assignableRoles(access.role).includes(role)) {
+    if (!assignableRoles(access.member.role).includes(role)) {
       throw forbidden(`Your role can't invite someone as ${role}.`);
     }
 
@@ -147,7 +154,7 @@ export const invitationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
         role,
         tokenHash: hash,
         expiresAt,
-        invitedBy: access.actor.user.id,
+        invitedBy: access.member.user.id,
         updatedAt: new Date(),
       };
       const [row] = open
@@ -159,7 +166,7 @@ export const invitationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       if (!row) throw new Error('Invitation write returned no row.');
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: open ? 'invitation.renewed' : 'invitation.created',
         target: { type: 'invitation', id: row.id },
         data: { email, role },
@@ -171,7 +178,7 @@ export const invitationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
     await sendInvitation(services, {
       to: email,
       orgName: access.org.name,
-      inviterName: access.actor.user.name,
+      inviterName: access.member.user.name,
       role,
       token,
       expiresAt,
@@ -180,7 +187,7 @@ export const invitationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       id: result.id,
       email: result.email,
       role: result.role,
-      invitedBy: { id: access.actor.user.id, name: access.actor.user.name },
+      invitedBy: { id: access.member.user.id, name: access.member.user.name },
       expiresAt: result.expiresAt.toISOString(),
       createdAt: result.createdAt.toISOString(),
     };
@@ -189,7 +196,7 @@ export const invitationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
 
   /** Sends a new link (the old one stops working) and restarts the expiry clock. */
   app.post('/invitations/:invitationId/resend', async (request) => {
-    const access = requirePermission(request, 'member:invite');
+    const access = requireMember(requirePermission(request, 'member:invite'));
     requireWritable(access);
     const id = uuidParam((request.params as { invitationId?: string }).invitationId, 'Invitation');
     const { token, hash } = newInvitationToken();
@@ -208,10 +215,10 @@ export const invitationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
         )
         .returning();
       if (!updated) throw notFound('Invitation');
-      if (!assignableRoles(access.role).includes(updated.role)) throw forbidden();
+      if (!assignableRoles(access.member.role).includes(updated.role)) throw forbidden();
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'invitation.resent',
         target: { type: 'invitation', id },
         data: { email: updated.email, role: updated.role },
@@ -223,7 +230,7 @@ export const invitationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
     await sendInvitation(services, {
       to: row.email,
       orgName: access.org.name,
-      inviterName: access.actor.user.name,
+      inviterName: access.member.user.name,
       role: row.role,
       token,
       expiresAt,
@@ -232,7 +239,7 @@ export const invitationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
   });
 
   app.delete('/invitations/:invitationId', async (request, reply) => {
-    const access = requirePermission(request, 'member:invite');
+    const access = requireMember(requirePermission(request, 'member:invite'));
     requireWritable(access);
     const id = uuidParam((request.params as { invitationId?: string }).invitationId, 'Invitation');
     await db.transaction(async (tx) => {
@@ -250,7 +257,7 @@ export const invitationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       if (!revoked) throw notFound('Invitation');
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'invitation.revoked',
         target: { type: 'invitation', id },
         data: revoked,
@@ -384,14 +391,29 @@ async function acceptInvitation(
 }
 
 /** Invitation links (`/invite/{token}`) and the signed-in user's own invitations. */
-export const publicInvitationRoutes: FastifyPluginAsync<{ services: Services }> = async (
-  app,
-  { services },
-) => {
+export const publicInvitationRoutes: FastifyPluginAsync<{
+  services: Services;
+  /** Invitation links opened per client IP. */
+  linkLimiter: RateLimiter;
+}> = async (app, { services, linkLimiter }) => {
   const { db } = services;
 
+  // Tokens can't be guessed (256 bits), but every try costs a lookup.
+  const limitLinks = (request: FastifyRequest, reply: FastifyReply) => {
+    const limit = linkLimiter.take(`invitation:${request.ip}`);
+    if (limit.allowed) return;
+    reply.header('retry-after', String(limit.retryAfter));
+    throw new ApiError(
+      429,
+      'rate_limited',
+      'Too many requests',
+      `Wait ${limit.retryAfter} seconds, then open the link again.`,
+    );
+  };
+
   /** What the invitation page shows before sign-in. Knowing the token is the permission. */
-  app.get('/invitations/:token', async (request): Promise<InvitationPreview> => {
+  app.get('/invitations/:token', async (request, reply): Promise<InvitationPreview> => {
+    limitLinks(request, reply);
     const { token } = request.params as { token: string };
     const row = await findOpenInvitation(db, { tokenHash: hashInvitationToken(token) });
     if (!row) throw invalidInvitation();
@@ -399,6 +421,7 @@ export const publicInvitationRoutes: FastifyPluginAsync<{ services: Services }> 
   });
 
   app.post('/invitations/:token/accept', async (request, reply) => {
+    limitLinks(request, reply);
     const actor = await requireReadySession(services, request, reply);
     const { token } = request.params as { token: string };
     return acceptInvitation(services, actor, { tokenHash: hashInvitationToken(token) }, request);

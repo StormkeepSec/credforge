@@ -6,7 +6,14 @@ import { ApiError, parse } from '../api/errors';
 import { recordAudit } from '../audit/audit';
 import { orgSubmittedMessage } from '../email/messages';
 import type { Services } from '../services';
-import { orgAccessOf, requestInfo, requirePermission, requireWritable, userActor } from './access';
+import {
+  orgAccessOf,
+  requestInfo,
+  requireMember,
+  requirePermission,
+  requireWritable,
+  userActor,
+} from './access';
 import { platformAdminEmails, serializeOrgDetails } from './service';
 
 /** How many orgs one person may have waiting for approval at once. */
@@ -97,10 +104,8 @@ export const userOrgRoutes: FastifyPluginAsync<{ services: Services }> = async (
       serializeOrgDetails(
         {
           org: created.org,
-          memberId: created.memberId,
-          role: 'owner',
+          member: { role: 'owner' },
           permissions: permissionsFor('owner'),
-          actor,
         },
         config.defaultOrgDailySendLimit,
       ),
@@ -113,11 +118,11 @@ export const orgRoutes: FastifyPluginAsync<{ services: Services }> = async (app,
   const { db, config } = services;
 
   app.get('/', async (request) =>
-    serializeOrgDetails(orgAccessOf(request), config.defaultOrgDailySendLimit),
+    serializeOrgDetails(requireMember(orgAccessOf(request)), config.defaultOrgDailySendLimit),
   );
 
   app.patch('/', async (request) => {
-    const access = requirePermission(request, 'org:update');
+    const access = requireMember(requirePermission(request, 'org:update'));
     requireWritable(access);
     const input = parse(updateOrgInput, request.body);
     if (input.name !== access.org.name) {
@@ -128,7 +133,7 @@ export const orgRoutes: FastifyPluginAsync<{ services: Services }> = async (app,
           .where(eq(organization.id, access.org.id));
         await recordAudit(tx, {
           orgId: access.org.id,
-          actor: userActor(access.actor),
+          actor: access.actor,
           action: 'org.updated',
           target: { type: 'organization', id: access.org.id },
           data: { name: { from: access.org.name, to: input.name } },

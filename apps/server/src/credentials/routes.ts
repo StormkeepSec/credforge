@@ -1,6 +1,7 @@
 import {
   type AwardPreview,
   awardInput,
+  awardPreviewInput,
   type BulkRevokeResult,
   bulkRevokeInput,
   type CredentialPage,
@@ -15,7 +16,7 @@ import { ApiError, conflict, notFound, parse, uuidParam } from '../api/errors';
 import { recordAudit } from '../audit/audit';
 import { awardMessage } from '../email/messages';
 import { imageSet, loadFiles } from '../files/service';
-import { requestInfo, requirePermission, requireWritable, userActor } from '../orgs/access';
+import { requestInfo, requirePermission, requireWritable } from '../orgs/access';
 import type { Services } from '../services';
 import { beforeCursor, credentialConditions, newestFirst } from './query';
 import { reissueCredential, revokeCredential, revokeCredentials } from './revocation';
@@ -43,11 +44,6 @@ export function parseCursor(value: string | undefined): { at: Date; id: string }
   }
   return { at: date, id };
 }
-
-const previewInput = z.object({
-  achievementId: z.uuid('Choose an achievement'),
-  recipient: z.object({ name: z.string().trim().max(200).optional() }).optional(),
-});
 
 /**
  * `/api/v1/orgs/:orgId/credentials`: awarding (design plan §8.2) and the issuer's view of what
@@ -113,7 +109,7 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       services,
       { orgId: access.org.id },
       input,
-      { type: 'user', id: access.actor.user.id, label: access.actor.user.email },
+      access.actor,
       requestInfo(request),
     );
     return reply
@@ -124,7 +120,7 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
   /** What the award email will say, for the award form's preview. Signs nothing. */
   app.post('/credentials/preview', async (request): Promise<AwardPreview> => {
     const access = requirePermission(request, 'credential:issue');
-    const input = parse(previewInput, request.body);
+    const input = parse(awardPreviewInput, request.body);
     const [row] = await db
       .select({ achievement, issuer })
       .from(achievement)
@@ -214,7 +210,7 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       });
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'credential.email_resent',
         target: { type: 'credential', id: credentialId },
         data: { to: row.credential.recipientEmail },
@@ -238,7 +234,7 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       access.org.id,
       credentialId,
       input,
-      userActor(access.actor),
+      access.actor,
       requestInfo(request),
     );
     return loadCredentialDetails(db, config.publicBaseUrl, access.org.id, credentialId);
@@ -254,7 +250,7 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       access.org.id,
       input.credentialIds,
       input,
-      userActor(access.actor),
+      access.actor,
       requestInfo(request),
     );
   });
@@ -273,7 +269,7 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       access.org.id,
       idOf(request),
       input,
-      userActor(access.actor),
+      access.actor,
       requestInfo(request),
     );
     return reply

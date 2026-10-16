@@ -1,6 +1,7 @@
 import type {
   Achievement,
   AchievementStatus,
+  ApiKey,
   AuditEventPage,
   BatchDetails,
   BatchPage,
@@ -160,6 +161,11 @@ export const queries = {
     queryOptions({
       queryKey: ['org', orgId, 'batch', batchId, 'rows', query],
       queryFn: () => api<BatchRowPage>(`/orgs/${orgId}/batches/${batchId}/rows?${query}`),
+    }),
+  apiKeys: (orgId: string) =>
+    queryOptions({
+      queryKey: ['org', orgId, 'api-keys'],
+      queryFn: () => api<{ apiKeys: ApiKey[] }>(`/orgs/${orgId}/api-keys`),
     }),
   platformOrgs: (status: OrgStatus | 'all') =>
     queryOptions({

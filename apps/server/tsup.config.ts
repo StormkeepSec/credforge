@@ -8,6 +8,7 @@ export default defineConfig({
     worker: 'src/worker.ts',
     migrate: 'src/migrate.ts',
     cli: 'src/cli.ts',
+    backup: 'src/backup.ts',
     healthcheck: 'src/healthcheck.ts',
   },
   format: 'esm',

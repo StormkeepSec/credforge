@@ -26,6 +26,8 @@ export const PERMISSIONS = [
   /** Download every credential with its recipient's address (CSV, JSONL). */
   'credential:export',
   'audit:read',
+  /** Create and revoke the org's API keys. */
+  'api_key:manage',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -69,6 +71,38 @@ export function permissionsFor(role: OrgRole): readonly Permission[] {
 
 export function roleHasPermission(role: OrgRole, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role].includes(permission);
+}
+
+/**
+ * What an API key may be allowed to do (design plan §10). Scopes are permissions, so the routes
+ * check keys and members the same way. Managing members, invitations, the issuer profile and API
+ * keys always needs a person signed in.
+ */
+export const API_KEY_SCOPES = [
+  'issuer:read',
+  'achievement:read',
+  'achievement:write',
+  'credential:read',
+  'credential:issue',
+  'credential:revoke',
+  'credential:export',
+  'audit:read',
+] as const satisfies readonly Permission[];
+export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
+
+export const API_KEY_SCOPE_LABELS: Record<ApiKeyScope, string> = {
+  'issuer:read': 'Read the issuer profile',
+  'achievement:read': 'Read achievements',
+  'achievement:write': 'Create and change achievements',
+  'credential:read': 'Read awarded badges and batches',
+  'credential:issue': 'Award badges (one at a time or in batches)',
+  'credential:revoke': 'Revoke and reissue badges',
+  'credential:export': 'Export badges with recipients’ email addresses',
+  'audit:read': 'Read and export the audit log',
+};
+
+export function isApiKeyScope(value: unknown): value is ApiKeyScope {
+  return typeof value === 'string' && (API_KEY_SCOPES as readonly string[]).includes(value);
 }
 
 /** Roles that must pass a credforge second factor when `REQUIRE_MFA_FOR_ADMINS=true` (§6.4). */

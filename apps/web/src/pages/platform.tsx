@@ -13,7 +13,7 @@ import {
   CardHeader,
   CardTitle,
 } from '../components/ui/card';
-import { Alert, Spinner } from '../components/ui/feedback';
+import { Alert, Badge, Spinner } from '../components/ui/feedback';
 import { Field, Input, Textarea } from '../components/ui/input';
 import { ApiError, errorMessage, patch, post, queries } from '../lib/api';
 import { cn, formatDate } from '../lib/utils';
@@ -74,9 +74,13 @@ function OrgCard({ org }: { org: PlatformOrg }) {
                     >
                       {new URL(issuer.website).host}
                     </a>{' '}
-                    <span className="text-muted-foreground">
-                      (self-reported, domain not verified)
-                    </span>
+                    {issuer.domainVerified ? (
+                      <Badge variant="success">Domain verified</Badge>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        (self-reported, domain not verified)
+                      </span>
+                    )}
                   </>
                 ) : (
                   <span className="text-muted-foreground"> · no website</span>

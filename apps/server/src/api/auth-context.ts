@@ -99,6 +99,16 @@ export async function requireSession(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<AuthContext> {
+  // A request with an Authorization header (an API key) is never authenticated by its cookies:
+  // that is what lets /api/v1 skip its Origin check for such requests (api/v1.ts).
+  if (request.headers.authorization) {
+    throw new ApiError(
+      401,
+      'unauthenticated',
+      'Sign in first',
+      'This endpoint needs a signed-in person, not an API key.',
+    );
+  }
   const context = await resolveAuth(deps, request, reply);
   if (!context) throw new ApiError(401, 'unauthenticated', 'Sign in first');
   return context;

@@ -5,6 +5,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import QRCode from 'qrcode';
 import { achievementDocument, achievementUrl, snapshotOf } from '../achievements/service';
 import { isUuid } from '../api/errors';
+import type { RateLimiter } from '../api/rate-limit';
 import { isSameOrigin } from '../api/v1';
 import { recordAudit } from '../audit/audit';
 import {
@@ -15,6 +16,7 @@ import {
   isValidClaimToken,
 } from '../credentials/service';
 import { type FileRow, imageSet, loadFiles } from '../files/service';
+import { verifiedHost } from '../issuers/domain';
 import { issuerUrl } from '../issuers/service';
 import type { Services } from '../services';
 import { verifyLocalCredential } from '../verify/local';
@@ -25,6 +27,7 @@ import { negotiate } from './negotiate';
 import { AchievementPage } from './pages/achievement';
 import { CertificatePage } from './pages/certificate';
 import { CredentialPage, type CredentialView } from './pages/credential';
+import { TooManyRequestsPage } from './pages/too-many';
 
 /** JSON first for verifiers that send no Accept header (or `*\/*`); browsers ask for HTML. */
 const DOCUMENT_OFFERS = [
@@ -205,7 +208,9 @@ export function linkedInUrl(view: CredentialView, url: string, id: string): stri
 export const publicCredentialRoutes: FastifyPluginAsync<{
   services: Pick<Services, 'db' | 'config' | 'storage'>;
   assets: PublicAssets;
-}> = async (app, { services: { db, config, storage }, assets }) => {
+  /** Claim links opened per client IP (tokens can't be guessed, but each costs a lookup). */
+  claimLimiter: RateLimiter;
+}> = async (app, { services: { db, config, storage }, assets, claimLimiter }) => {
   const base = config.publicBaseUrl;
   const secureCookies = base.startsWith('https://');
 
@@ -244,6 +249,20 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
 
     // A claim link: trade the token for a cookie, then show the clean URL.
     if (typeof query.t === 'string') {
+      const limit = claimLimiter.take(`claim:${request.ip}`);
+      if (!limit.allowed) {
+        reply.code(429).header('retry-after', String(limit.retryAfter));
+        return sendHtml(
+          reply,
+          renderDocument(
+            <TooManyRequestsPage
+              url={url}
+              stylesheet={assets.stylesheet}
+              retryAfter={limit.retryAfter}
+            />,
+          ),
+        );
+      }
       if (!isValidClaimToken(row, query.t)) {
         return reply.redirect(`${url}?link=expired`, 303);
       }
@@ -314,6 +333,16 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
           .from(statusList)
           .where(eq(statusList.id, row.statusListId))
       : [];
+    const [issuerRow] = await db
+      .select({
+        url: issuer.url,
+        domain: issuer.domain,
+        domainVerifiedAt: issuer.domainVerifiedAt,
+        orgStatus: organization.status,
+      })
+      .from(issuer)
+      .innerJoin(organization, eq(issuer.orgId, organization.id))
+      .where(eq(issuer.id, row.issuerId));
     const verification = withRevocation(
       row,
       await verifyLocalCredential(db, base, `${row.id}:${list?.version ?? 0}`, row.document),
@@ -336,6 +365,9 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
               : null
           }
           notice={query.link === 'expired' && !owner ? 'link_expired' : null}
+          issuerVerifiedHost={issuerRow ? verifiedHost(issuerRow) : null}
+          reportEmail={config.abuseEmail}
+          orgStatus={issuerRow?.orgStatus ?? 'active'}
         />,
       ),
     );
@@ -521,6 +553,8 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
           image={images ? { url: images.url512, alt: `${snapshot.name} badge` } : null}
           ogImage={images?.ogUrl ? { url: images.ogUrl, width: 1200, height: 630 } : null}
           issuer={{ name: row.issuer.name, pageUrl }}
+          reportEmail={config.abuseEmail}
+          orgStatus={row.orgStatus}
         />,
       ),
     );

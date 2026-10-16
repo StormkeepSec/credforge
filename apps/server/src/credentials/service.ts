@@ -11,6 +11,7 @@ import type {
 import {
   achievement,
   and,
+  apiKey,
   auditEvent,
   credential,
   type Database,
@@ -151,8 +152,9 @@ export interface AwardServices {
   outbox: EmailOutbox;
 }
 
+/** Who awards: a member, or an API key (the worker awards a batch as whoever confirmed it). */
 export interface AwardActor {
-  type: 'user';
+  type: 'user' | 'api_key';
   id: string;
   label: string;
 }
@@ -374,7 +376,7 @@ export async function awardInTransaction(
     batchRowNumber: options.batch?.rowNumber ?? null,
     replacesId: options.replaces?.id ?? null,
     customFields: options.customFields ?? {},
-    issuedByType: 'user',
+    issuedByType: actor.type,
     issuedById: actor.id,
     createdAt: now,
     updatedAt: now,
@@ -610,14 +612,17 @@ export async function loadCredentialDetails(
   if (!row) throw notFound('Credential');
   const files = await loadFiles(db, [row.imageFileId]);
   const emails = (await emailsFor(db, orgId, [credentialId])).get(credentialId) ?? [];
-  const issuedBy = row.credential.issuedById
-    ? (
-        await db
-          .select({ email: user.email })
-          .from(user)
-          .where(eq(user.id, row.credential.issuedById))
-      )[0]
-    : undefined;
+  const issuedById = row.credential.issuedById;
+  const issuedBy = !issuedById
+    ? undefined
+    : row.credential.issuedByType === 'api_key'
+      ? (
+          await db
+            .select({ name: apiKey.name, prefix: apiKey.prefix })
+            .from(apiKey)
+            .where(eq(apiKey.id, issuedById))
+        ).map((key) => ({ label: `${key.name} (${key.prefix})` }))[0]
+      : (await db.select({ label: user.email }).from(user).where(eq(user.id, issuedById)))[0];
   const [revokedEvent] =
     row.credential.status === 'revoked'
       ? await db
@@ -647,7 +652,7 @@ export async function loadCredentialDetails(
     issuedBy: {
       type: row.credential.issuedByType,
       id: row.credential.issuedById,
-      label: issuedBy?.email ?? null,
+      label: issuedBy?.label ?? null,
     },
     claimLinkExpiresAt: row.credential.claimTokenExpiresAt?.toISOString() ?? null,
     emails: emails.map(serializeEmail),

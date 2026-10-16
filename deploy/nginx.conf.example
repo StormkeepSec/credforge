@@ -1,0 +1,141 @@
+# nginx in front of credforge (design plan §13.3; docs/deployment.md walks through it).
+#
+# The app listens on 127.0.0.1:3000 only (docker-compose.yml). This file serves
+# https://credforge.app, sends http:// and www. there, and caches the content-addressed images.
+# Replace credforge.app throughout for your own instance. Needs nginx 1.25.1 or newer for
+# "http2 on" (Debian 13 has 1.26).
+#
+# Get the certificate first (DNS must already point here). Debian's default site serves
+# /var/www/html on port 80, and this file keeps serving the challenges from there for renewals:
+#   sudo certbot certonly --webroot -w /var/www/html -d credforge.app -d www.credforge.app \
+#     --deploy-hook "systemctl reload nginx"
+# Then install this file in place of the default site:
+#   sudo cp nginx.conf.example /etc/nginx/sites-available/credforge.app
+#   sudo ln -s /etc/nginx/sites-available/credforge.app /etc/nginx/sites-enabled/
+#   sudo rm /etc/nginx/sites-enabled/default
+#   sudo nginx -t && sudo systemctl reload nginx
+#   sudo certbot renew --dry-run
+
+upstream credforge {
+    server 127.0.0.1:3000;
+    keepalive 16;
+}
+
+# Badge images and issuer logos (/achievements/{id}/images/…, /issuers/{id}/images/…). Their URLs
+# contain the image's SHA-256 and the app answers "Cache-Control: public, max-age=31536000,
+# immutable", so a cached copy never goes stale and repeat requests reach neither Node nor Spaces.
+proxy_cache_path /var/cache/nginx/credforge-images levels=1:2 keys_zone=credforge_images:10m
+                 max_size=1g inactive=30d use_temp_path=off;
+
+# A coarse per-address flood guard. The app has its own, finer limits (verification, sign-in,
+# claim links, API keys). It is generous because whole schools and offices share one address, and
+# it is not applied to /status/, the images or the static files below: validators fetch the status
+# list for every check (the 1EdTech validator about 10 times per check).
+limit_req_zone $binary_remote_addr zone=credforge_flood:10m rate=20r/s;
+
+# TLS for every server below: Mozilla's "intermediate" settings. Let's Encrypt no longer runs
+# OCSP, so there is no stapling.
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+ssl_prefer_server_ciphers off;
+ssl_session_cache shared:credforge_tls:10m;
+ssl_session_timeout 1d;
+ssl_session_tickets off;
+
+# Anything that isn't credforge.app or www.credforge.app: close the connection.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    ssl_reject_handshake on;
+    return 444;
+}
+
+# http:// → https://credforge.app, except certbot's renewal challenges.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name credforge.app www.credforge.app;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+    location / {
+        return 301 https://credforge.app$request_uri;
+    }
+}
+
+# https://www.credforge.app → https://credforge.app (the certificate covers both names).
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name www.credforge.app;
+
+    ssl_certificate     /etc/letsencrypt/live/credforge.app/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/credforge.app/privkey.pem;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+    return 301 https://credforge.app$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name credforge.app;
+
+    ssl_certificate     /etc/letsencrypt/live/credforge.app/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/credforge.app/privkey.pem;
+    server_tokens off;
+
+    # The app sets its own security headers (CSP, frame, referrer and resource policies, and HSTS
+    # over https). HSTS is set here instead, so nginx's own error pages carry it too. Add
+    # "; preload" only once you mean to submit the domain to the browsers' preload list.
+    # A location with an add_header of its own doesn't inherit this one: repeat it there.
+    proxy_hide_header Strict-Transport-Security;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+
+    # Badge images and logos, CSV files up to 5 MB, SendGrid webhook batches.
+    client_max_body_size 10m;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    # Overwrite, never append ($proxy_add_x_forwarded_for): with TRUST_PROXY=true the app takes the
+    # first address in this header as the client's, so a value sent by the client must not get
+    # through, or anyone could choose the address that rate limits count against.
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # Exports are streamed straight from the database and can take a while.
+    proxy_read_timeout 300s;
+
+    location / {
+        limit_req zone=credforge_flood burst=200 nodelay;
+        limit_req_status 429;
+        proxy_pass http://credforge;
+    }
+
+    # Signed status lists: never rate limited (see limit_req_zone above). The app sends
+    # "Cache-Control: public, max-age=60" and an ETag.
+    location /status/ {
+        proxy_pass http://credforge;
+    }
+
+    # The stylesheet, the issuer app's hashed files and the brand assets: not rate limited.
+    location ~ ^/(assets|brand)/ {
+        proxy_pass http://credforge;
+    }
+
+    # Content-addressed images (see proxy_cache_path above). Query strings don't change them.
+    location ~ ^/(achievements|issuers)/[^/]+/images/ {
+        proxy_pass http://credforge;
+        proxy_cache credforge_images;
+        proxy_cache_key $uri;
+        proxy_cache_valid 200 30d;
+        proxy_cache_lock on;
+        proxy_cache_use_stale error timeout updating;
+        add_header X-Cache-Status $upstream_cache_status always;
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+    }
+}

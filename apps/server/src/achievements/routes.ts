@@ -24,13 +24,7 @@ import { ApiError, conflict, notFound, parse, uuidParam } from '../api/errors';
 import { acceptImageUploads, storeUploadedImage, UPLOAD_ROUTE_OPTIONS } from '../api/uploads';
 import { recordAudit } from '../audit/audit';
 import { deleteFiles, loadFiles } from '../files/service';
-import {
-  type OrgAccess,
-  requestInfo,
-  requirePermission,
-  requireWritable,
-  userActor,
-} from '../orgs/access';
+import { type OrgAccess, requestInfo, requirePermission, requireWritable } from '../orgs/access';
 import type { Services } from '../services';
 import {
   type AchievementRow,
@@ -120,11 +114,11 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
         revision,
         orgId: access.org.id,
         data: next,
-        createdBy: access.actor.user.id,
+        createdBy: access.userId,
       });
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action,
         target: { type: 'achievement', id: achievementId },
         data: { revision, fields },
@@ -191,7 +185,7 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
           issuerId: owner.id,
           revision: 1,
           status: 'draft',
-          createdBy: access.actor.user.id,
+          createdBy: access.userId,
         })
         .returning();
       if (!row) throw new Error('Insert returned no row.');
@@ -200,11 +194,11 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
         revision: 1,
         orgId: access.org.id,
         data: snapshot,
-        createdBy: access.actor.user.id,
+        createdBy: access.userId,
       });
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'achievement.created',
         target: { type: 'achievement', id: row.id },
         data: { name: row.name, achievementType: row.achievementType },
@@ -248,7 +242,7 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
       orgId: access.org.id,
       kind: 'badge_image',
       subjectId: achievementId,
-      createdBy: access.actor.user.id,
+      createdBy: access.userId,
     });
     await saveChange(
       request,
@@ -293,7 +287,7 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
         .where(eq(achievement.id, achievementId));
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'achievement.published',
         target: { type: 'achievement', id: achievementId },
         data: { revision: row.revision },
@@ -320,7 +314,7 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
         .where(eq(achievement.id, achievementId));
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'achievement.archived',
         target: { type: 'achievement', id: achievementId },
         request: requestInfo(request),
@@ -343,7 +337,7 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
         .where(eq(achievement.id, achievementId));
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'achievement.restored',
         target: { type: 'achievement', id: achievementId },
         request: requestInfo(request),
@@ -365,7 +359,7 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
       await tx.delete(achievement).where(eq(achievement.id, achievementId));
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'achievement.deleted',
         target: { type: 'achievement', id: achievementId },
         data: { name: row.name },

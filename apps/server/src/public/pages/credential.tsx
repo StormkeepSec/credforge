@@ -1,6 +1,8 @@
+import type { OrgStatus } from '@credforge/contracts';
 import type { CredentialVerification } from '@credforge/ob3';
 import type { ReactNode } from 'react';
-import { SitePage } from '../components/site-chrome';
+import { OrgStatusNotice } from '../components/org-notice';
+import { ReportProblem, SitePage, websiteLabel } from '../components/site-chrome';
 import { Document } from '../document';
 import { formatLongDate } from '../format';
 
@@ -52,6 +54,12 @@ export interface CredentialPageProps {
   owner: OwnerView | null;
   /** A claim link that didn't work. */
   notice: 'link_expired' | null;
+  /** The issuer's website host, when the issuer proved it controls it (§6.3). */
+  issuerVerifiedHost: string | null;
+  /** Where "Report a problem" goes; unset hides it. */
+  reportEmail?: string;
+  /** The awarding organization's status: pages say when it is new, suspended or declined. */
+  orgStatus: OrgStatus;
 }
 
 const STATE: Record<CredentialState, { label: string; className: string }> = {
@@ -137,7 +145,11 @@ export function CredentialPage({
   verification,
   owner,
   notice,
+  issuerVerifiedHost,
+  reportEmail,
+  orgStatus,
 }: CredentialPageProps) {
+  const website = c.issuer.website ? websiteLabel(c.issuer.website, issuerVerifiedHost) : null;
   const awardedTo = c.recipientName ? ` awarded to ${c.recipientName}` : '';
   return (
     <Document
@@ -158,6 +170,7 @@ export function CredentialPage({
     >
       <SitePage>
         <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
+          <OrgStatusNotice status={orgStatus} subject="badge" className="mb-8" />
           {notice === 'link_expired' && (
             <div role="note" className="mb-8 rounded-lg border border-warning/40 bg-warning/5 p-4">
               <p className="font-semibold">This link no longer works</p>
@@ -439,10 +452,11 @@ export function CredentialPage({
                     <a href={c.issuer.pageUrl} className={link}>
                       {c.issuer.name}
                     </a>
-                    {c.issuer.website && (
+                    {website && (
                       <span className="text-ink-muted">
                         {' '}
-                        · website {hostOf(c.issuer.website)} (self-reported)
+                        · {website.verified ? 'website verified:' : 'website'} {website.host}
+                        {website.verified ? '' : ' (self-reported)'}
                       </span>
                     )}
                   </dd>
@@ -460,7 +474,10 @@ export function CredentialPage({
                   <dd className="mt-1 font-mono break-all">{url}</dd>
                 </div>
               </dl>
-              <p className="mt-8 text-sm text-ink-muted">Hosted on credforge.</p>
+              <div className="mt-8 grid gap-2">
+                <p className="text-sm text-ink-muted">Hosted on credforge.</p>
+                <ReportProblem email={reportEmail} pageUrl={url} />
+              </div>
             </Section>
           </div>
         </div>

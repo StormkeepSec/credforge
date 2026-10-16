@@ -8,6 +8,7 @@ import { createDeliveryTracker } from './email/tracking';
 import { createEmailTransport } from './email/transport';
 import { createStorage } from './files/storage';
 import { enforceMasterKey, enforcePublicBaseUrl } from './instance';
+import { createDomainChecker } from './issuers/domain';
 import { registerJobs } from './jobs';
 import { createJobQueue } from './jobs/enqueue';
 import { loggerOptions } from './logger';
@@ -44,6 +45,7 @@ try {
       outbox: createQueueOutbox(boss),
       storage: createStorage(config.storage),
       jobs: createJobQueue(boss),
+      domains: createDomainChecker(`credforge-domain-check (+${config.publicBaseUrl})`),
     },
   });
 } catch (err) {

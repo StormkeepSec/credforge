@@ -2,7 +2,7 @@ import type { BulkRevokeResult, reissueInput } from '@credforge/contracts';
 import { and, asc, credential, eq, inArray, organization, type Queryable } from '@credforge/db';
 import type { z } from 'zod';
 import { ApiError, notFound } from '../api/errors';
-import { recordAudit } from '../audit/audit';
+import { type AuditActor, recordAudit } from '../audit/audit';
 import type { JobQueue } from '../jobs/enqueue';
 import { setStatusBits } from '../status-lists/service';
 import { forgetVerification } from '../verify/local';
@@ -43,7 +43,7 @@ async function revokeRows(
   orgId: string,
   rows: CredentialRow[],
   details: RevokeDetails,
-  actor: AwardActor,
+  actor: AuditActor,
   request: RequestInfo,
 ): Promise<void> {
   if (rows.length === 0) return;
@@ -106,7 +106,7 @@ export async function revokeCredentials(
   orgId: string,
   credentialIds: string[],
   details: RevokeDetails,
-  actor: AwardActor,
+  actor: AuditActor,
   request: RequestInfo,
 ): Promise<BulkRevokeResult> {
   const result = await services.db.transaction(async (tx) => {

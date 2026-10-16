@@ -1,4 +1,10 @@
-import { type Issuer, type IssuerInputBody, issuerInput } from '@credforge/contracts';
+import {
+  type DomainCheckResult,
+  type DomainVerification,
+  type Issuer,
+  type IssuerInputBody,
+  issuerInput,
+} from '@credforge/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BadgeCheck, Copy, ExternalLink, KeyRound } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
@@ -304,6 +310,123 @@ function IdentityCard({ issuer }: { issuer: Issuer }) {
   );
 }
 
+/**
+ * Domain verification (design plan §6.3): a DNS TXT record or a file on the website proves the
+ * issuer controls it. Public pages say "Website verified" only then; otherwise "self-reported".
+ */
+function DomainCard({
+  orgId,
+  issuer,
+  readOnly,
+}: {
+  orgId: string;
+  issuer: Issuer;
+  readOnly: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const domain = issuer.domain;
+  const instructions = useMutation({
+    mutationFn: () =>
+      post<DomainVerification>(`/orgs/${orgId}/issuers/${issuer.id}/domain-verification`),
+  });
+  const check = useMutation({
+    mutationFn: () =>
+      post<DomainCheckResult>(`/orgs/${orgId}/issuers/${issuer.id}/domain-verification/check`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['org', orgId, 'issuers'] }),
+  });
+  const details = check.data?.domain ?? instructions.data;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Website verification</CardTitle>
+        <CardDescription>
+          Prove that your organization controls its website’s domain. Your badge and issuer pages
+          then say “Website verified” instead of “self-reported”, and verified organizations are
+          easier to approve.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4 text-sm">
+        {!domain ? (
+          <Alert variant="info" live={false}>
+            Add your website (a domain name, such as https://example.org) to the profile first.
+          </Alert>
+        ) : domain.verifiedAt ? (
+          <Alert variant="success" live={false} title={`Verified: ${domain.host}`}>
+            Proven by {domain.method === 'dns' ? 'a DNS record' : 'a file on the website'} on{' '}
+            {formatDate(domain.verifiedAt)}. credforge checks it again every day; keep the record or
+            file in place.
+          </Alert>
+        ) : (
+          <p>
+            <span className="font-semibold">{domain.host}</span> is shown as self-reported.
+          </p>
+        )}
+
+        {domain && !readOnly && !details && (
+          <Button
+            variant="outline"
+            className="justify-self-start"
+            pending={instructions.isPending}
+            onClick={() => instructions.mutate()}
+          >
+            {domain.verifiedAt ? 'Show the record' : 'Verify this domain'}
+          </Button>
+        )}
+        {instructions.isError && <Alert variant="error">{errorMessage(instructions.error)}</Alert>}
+
+        {details && (
+          <div className="grid gap-4">
+            <p>Publish one of these, then check:</p>
+            <div className="grid gap-2 rounded-md border p-4">
+              <p className="font-semibold">A DNS TXT record</p>
+              <dl className="grid gap-2 sm:grid-cols-[6rem_1fr]">
+                <dt className="text-muted-foreground">Name</dt>
+                <dd className="font-mono break-all">{details.dnsName}</dd>
+                <dt className="text-muted-foreground">Value</dt>
+                <dd className="font-mono break-all">{details.value}</dd>
+              </dl>
+              <div className="flex flex-wrap gap-2">
+                <CopyButton value={details.value} label="Copy value" />
+              </div>
+            </div>
+            <div className="grid gap-2 rounded-md border p-4">
+              <p className="font-semibold">Or a file on your website</p>
+              <p className="text-muted-foreground">
+                Serve this text at the address below over HTTPS, without redirects.
+              </p>
+              <p className="font-mono break-all">{details.fileUrl}</p>
+              <p className="font-mono break-all">{details.value}</p>
+            </div>
+            {!readOnly && (
+              <Button
+                className="justify-self-start"
+                pending={check.isPending}
+                onClick={() => check.mutate()}
+              >
+                Check now
+              </Button>
+            )}
+          </div>
+        )}
+        {check.isError && <Alert variant="error">{errorMessage(check.error)}</Alert>}
+        {check.data && (
+          <Alert
+            variant={check.data.verified ? 'success' : 'warning'}
+            title={check.data.verified ? 'Domain verified' : 'Not verified yet'}
+          >
+            <ul className="grid gap-1">
+              {check.data.findings.map((finding) => (
+                <li key={finding.method}>{finding.detail}</li>
+              ))}
+            </ul>
+          </Alert>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 /** The org's issuer profile (the OB `Profile`): create, edit, and see its id and key. */
 export function OrgIssuerPage({ orgId }: { orgId: string }) {
   const { data: org } = useQuery(queries.org(orgId));
@@ -330,6 +453,7 @@ export function OrgIssuerPage({ orgId }: { orgId: string }) {
           <IssuerForm key={orgId} orgId={orgId} issuer={issuer} readOnly={!canWrite} />
         )}
         {issuer && <LogoCard orgId={orgId} issuer={issuer} readOnly={!canWrite} />}
+        {issuer && <DomainCard orgId={orgId} issuer={issuer} readOnly={!canWrite} />}
         {issuer && <IdentityCard issuer={issuer} />}
       </div>
     </>

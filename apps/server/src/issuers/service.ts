@@ -11,6 +11,7 @@ import {
 } from '@credforge/ob3';
 import { type KeyEncryption, signingKeyAad } from '../crypto/key-encryption';
 import { type FileRow, imageSet } from '../files/service';
+import { domainStatus } from './domain';
 
 export type IssuerRow = typeof issuer.$inferSelect;
 export type SigningKeyRow = typeof signingKey.$inferSelect;
@@ -101,6 +102,7 @@ export function serializeIssuer(
     url: issuerUrl(publicBaseUrl, row.id),
     name: row.name,
     website: row.url,
+    domain: domainStatus(row),
     email: row.email,
     description: row.description,
     logo: logo ? imageSet(publicBaseUrl, logo) : null,

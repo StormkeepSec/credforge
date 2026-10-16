@@ -5,7 +5,9 @@ import Fastify, {
   type FastifyServerOptions,
   type RouteOptions,
 } from 'fastify';
-import { apiV1 } from './api/v1';
+import { apiDocsRoutes } from './api/docs-routes';
+import { createRateLimiter } from './api/rate-limit';
+import { type ApiResponseObserver, apiV1 } from './api/v1';
 import { authRoutes } from './auth/routes';
 import type { Config } from './config';
 import { sendgridWebhookRoutes } from './email/webhook-routes';
@@ -35,7 +37,13 @@ export interface AppDependencies {
   onRoute?: (route: RouteOptions) => void;
   /** Fetches other issuers' documents for /verify (tests pass a stand-in). */
   verifyFetcher?: DocumentFetcher;
+  /** Sees every `/api/v1` response (tests check them against the OpenAPI schemas). */
+  onApiResponse?: ApiResponseObserver;
 }
+
+/** Browser features no credforge page uses (design plan §12). */
+export const PERMISSIONS_POLICY =
+  'camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()';
 
 const REQUEST_ID_PATTERN = /^[\w-]{8,128}$/;
 
@@ -47,10 +55,13 @@ export async function buildApp({
   loggerInstance,
   onRoute,
   verifyFetcher,
+  onApiResponse,
 }: AppDependencies) {
   const app = Fastify({
     ...(loggerInstance ? { loggerInstance } : { logger: logger ?? loggerOptions(config) }),
     trustProxy: config.trustProxy,
+    // nginx buffers request bodies; a request that still takes this long is stuck.
+    requestTimeout: 120_000,
     // Reuse a well-formed X-Request-Id from the reverse proxy; otherwise mint one.
     requestIdHeader: false,
     genReqId(request) {
@@ -64,6 +75,7 @@ export async function buildApp({
   if (onRoute) app.addHook('onRoute', onRoute);
   app.addHook('onSend', async (request, reply) => {
     reply.header('x-request-id', request.id);
+    reply.header('permissions-policy', PERMISSIONS_POLICY);
   });
 
   const isHttps = config.publicBaseUrl.startsWith('https://');
@@ -86,6 +98,8 @@ export async function buildApp({
     // No referrer to other sites. Same-origin requests keep theirs, so browsers send a real
     // Origin header on the app's own form posts and fetches (with no-referrer they send "null").
     referrerPolicy: { policy: 'same-origin' },
+    // Matches the CSP's frame-ancestors 'none' for browsers that only know this header.
+    xFrameOptions: { action: 'deny' },
     // HSTS only when served over HTTPS (nginx may also set it).
     strictTransportSecurity: isHttps ? { maxAge: 31_536_000, includeSubDomains: true } : false,
   });
@@ -93,14 +107,25 @@ export async function buildApp({
   const assets = resolvePublicAssets(config);
   await app.register(healthRoutes, { checkDatabase });
   await app.register(publicPages, { config, assets });
+  await app.register(apiDocsRoutes, { config });
   if (services) {
     const tools = createVerifyTools(services.config);
     const verify = { limiter: tools.limiter, fetcher: verifyFetcher ?? tools.fetcher };
+    // In memory: one app process behind nginx (design plan §3). `/status/` is never limited.
+    const apiKeyLimiter = createRateLimiter({ max: config.apiRateLimit, windowMs: 60_000 });
+    const linkLimiter = createRateLimiter({ max: config.claimRateLimit, windowMs: 60_000 });
     await app.register(authRoutes, services);
-    await app.register(apiV1, { services, verify, prefix: '/api/v1' });
+    await app.register(apiV1, {
+      services,
+      verify,
+      apiKeyLimiter,
+      linkLimiter,
+      onApiResponse,
+      prefix: '/api/v1',
+    });
     await app.register(publicIssuerRoutes, { services, assets });
     await app.register(publicImageRoutes, { services });
-    await app.register(publicCredentialRoutes, { services, assets });
+    await app.register(publicCredentialRoutes, { services, assets, claimLimiter: linkLimiter });
     await app.register(publicVerifyRoutes, { services, assets, ...verify });
     await app.register(sendgridWebhookRoutes, { services });
   }

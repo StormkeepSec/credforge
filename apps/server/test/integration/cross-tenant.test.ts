@@ -1,5 +1,7 @@
+import { API_KEY_SCOPES } from '@credforge/contracts';
 import {
   achievement,
+  apiKey,
   auditEvent,
   credential,
   eq,
@@ -34,6 +36,9 @@ interface Tenant {
   achievementId: string;
   credentialId: string;
   batchId: string;
+  keyId: string;
+  /** An API key with every scope a key can have. */
+  key: string;
 }
 
 let png: Buffer;
@@ -94,7 +99,24 @@ ${name} Learner,learner-${orgId}@example.org
   );
   const batchId = (batch.json() as { id: string }).id;
   if (!batchId) throw new Error(`Batch failed: ${batch.body}`);
-  return { owner, orgId, issuerId, memberId, invitationId, achievementId, credentialId, batchId };
+  const created_key = await owner.post(`/api/v1/orgs/${orgId}/api-keys`, {
+    name: `${name} integration`,
+    scopes: [...API_KEY_SCOPES],
+  });
+  const { id: keyId, key } = created_key.json() as { id: string; key: string };
+  if (!key) throw new Error(`API key failed: ${created_key.body}`);
+  return {
+    owner,
+    orgId,
+    issuerId,
+    memberId,
+    invitationId,
+    achievementId,
+    credentialId,
+    batchId,
+    keyId,
+    key,
+  };
 }
 
 beforeAll(async () => {
@@ -119,7 +141,8 @@ interface Case {
     | 'issuerId'
     | 'achievementId'
     | 'credentialId'
-    | 'batchId';
+    | 'batchId'
+    | 'keyId';
   /** Sends an image file as the body (uploads). */
   upload?: true;
 }
@@ -213,6 +236,19 @@ const CASES: Case[] = [
   { method: 'GET', route: '/exports/credentials.jsonl' },
   { method: 'GET', route: '/exports/audit-events.csv' },
   { method: 'GET', route: '/exports/audit-events.jsonl' },
+  { method: 'GET', route: '/api-keys' },
+  { method: 'POST', route: '/api-keys', body: { name: 'Intruder', scopes: ['credential:read'] } },
+  { method: 'DELETE', route: '/api-keys/:keyId', resource: 'keyId' },
+  {
+    method: 'POST',
+    route: '/issuers/:issuerId/domain-verification',
+    resource: 'issuerId',
+  },
+  {
+    method: 'POST',
+    route: '/issuers/:issuerId/domain-verification/check',
+    resource: 'issuerId',
+  },
 ];
 
 /** Sends a case as `client`: JSON, or an image upload. */
@@ -229,7 +265,8 @@ function url(orgId: string, route: string, ids: Partial<Tenant>) {
     .replace(':issuerId', ids.issuerId ?? '')
     .replace(':achievementId', ids.achievementId ?? '')
     .replace(':credentialId', ids.credentialId ?? '')
-    .replace(':batchId', ids.batchId ?? '');
+    .replace(':batchId', ids.batchId ?? '')
+    .replace(':keyId', ids.keyId ?? '');
 }
 
 /** Everything of org B's that an intruder might change. */
@@ -251,6 +288,7 @@ async function snapshotB() {
       .select()
       .from(issuanceBatchRow)
       .where(eq(issuanceBatchRow.orgId, b.orgId)),
+    apiKeys: await env.ownerDb.select().from(apiKey).where(eq(apiKey.orgId, b.orgId)),
   };
 }
 
@@ -294,6 +332,7 @@ describe('cross-tenant access', () => {
       b.achievementId,
       b.credentialId,
       b.batchId,
+      b.keyId,
     ];
     for (const test of CASES.filter((item) => item.method === 'GET' && !item.resource)) {
       const response = await a.owner.get(url(a.orgId, test.route, a));
@@ -366,6 +405,44 @@ describe('cross-tenant access', () => {
       `/api/v1/orgs/${a.orgId}/exports/credentials.csv?achievementId=${b.achievementId}`,
     );
     expect(exported.body).not.toContain(b.credentialId);
+    expect(await snapshotB()).toEqual(before);
+  });
+
+  it("can't use an API key on another org", async () => {
+    const before = await snapshotB();
+    for (const test of CASES) {
+      const response = await env.app.inject({
+        method: test.method,
+        url: url(b.orgId, test.route, b),
+        headers: {
+          authorization: `Bearer ${a.key}`,
+          ...(test.upload
+            ? { 'content-type': 'image/png' }
+            : test.body !== undefined && { 'content-type': 'application/json' }),
+        },
+        ...(test.upload
+          ? { payload: png }
+          : test.body !== undefined && { payload: JSON.stringify(test.body) }),
+      });
+      expect(response.statusCode, `${test.method} ${test.route}`).toBe(404);
+    }
+    // And another org's resources through its own org.
+    for (const test of CASES.filter((item) => item.resource)) {
+      const response = await env.app.inject({
+        method: test.method,
+        url: url(a.orgId, test.route, b),
+        headers: {
+          authorization: `Bearer ${a.key}`,
+          ...(test.upload
+            ? { 'content-type': 'image/png' }
+            : test.body !== undefined && { 'content-type': 'application/json' }),
+        },
+        ...(test.upload
+          ? { payload: png }
+          : test.body !== undefined && { payload: JSON.stringify(test.body) }),
+      });
+      expect([403, 404], `${test.method} ${test.route}`).toContain(response.statusCode);
+    }
     expect(await snapshotB()).toEqual(before);
   });
 

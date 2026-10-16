@@ -5,8 +5,9 @@ import { notFound, parse, uuidParam } from '../api/errors';
 import { acceptImageUploads, storeUploadedImage, UPLOAD_ROUTE_OPTIONS } from '../api/uploads';
 import { recordAudit } from '../audit/audit';
 import { deleteFiles, loadFiles } from '../files/service';
-import { requestInfo, requirePermission, requireWritable, userActor } from '../orgs/access';
+import { requestInfo, requirePermission, requireWritable } from '../orgs/access';
 import type { Services } from '../services';
+import { checkDomain, createDomainChecker, domainChanges, startDomainVerification } from './domain';
 import {
   createSigningKey,
   type IssuerRow,
@@ -30,6 +31,8 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
   { services },
 ) => {
   const { db, keys, config, storage } = services;
+  const domains =
+    services.domains ?? createDomainChecker(`credforge-domain-check (+${config.publicBaseUrl})`);
   acceptImageUploads(app);
 
   async function load(orgId: string, issuerId: string): Promise<Issuer> {
@@ -90,7 +93,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
       await loadSigner(keys, config.publicBaseUrl, key);
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'issuer.created',
         target: { type: 'issuer', id: row.id },
         data: { name: row.name, url: row.url, email: row.email },
@@ -98,7 +101,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
       });
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'signing_key.created',
         target: { type: 'signing_key', id: key.id },
         data: {
@@ -137,7 +140,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
         .update(issuer)
         .set({
           ...(input.name !== undefined && { name: input.name }),
-          ...(input.url !== undefined && { url: input.url }),
+          ...(input.url !== undefined && { url: input.url, ...domainChanges(before, input.url) }),
           ...(input.email !== undefined && { email: input.email }),
           ...(input.description !== undefined && { description: input.description }),
           updatedAt: new Date(),
@@ -149,7 +152,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
       if (Object.keys(diff).length > 0) {
         await recordAudit(tx, {
           orgId: access.org.id,
-          actor: userActor(access.actor),
+          actor: access.actor,
           action: 'issuer.updated',
           target: { type: 'issuer', id: issuerId },
           data: diff,
@@ -178,7 +181,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
       orgId: access.org.id,
       kind: 'issuer_logo',
       subjectId: issuerId,
-      createdBy: access.actor.user.id,
+      createdBy: access.userId,
     });
     const replaced = await db.transaction(async (tx) => {
       const [before] = await tx
@@ -194,7 +197,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
         .where(eq(issuer.id, issuerId));
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'issuer.logo_changed',
         target: { type: 'issuer', id: issuerId },
         data: {
@@ -230,7 +233,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
         .where(eq(issuer.id, issuerId));
       await recordAudit(tx, {
         orgId: access.org.id,
-        actor: userActor(access.actor),
+        actor: access.actor,
         action: 'issuer.logo_removed',
         target: { type: 'issuer', id: issuerId },
         request: requestInfo(request),
@@ -239,5 +242,29 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
     });
     if (removed) await deleteFiles(db, storage, [...(await loadFiles(db, [removed])).values()]);
     return load(access.org.id, issuerId);
+  });
+
+  /**
+   * Domain verification (design plan §6.3): the DNS TXT record or file that proves the issuer
+   * controls its website's host. Public pages say "Website verified" only after a check finds it.
+   */
+  app.post('/issuers/:issuerId/domain-verification', async (request) => {
+    const access = requirePermission(request, 'issuer:update');
+    requireWritable(access);
+    const issuerId = uuidParam((request.params as { issuerId?: string }).issuerId, 'Issuer');
+    return db.transaction((tx) => startDomainVerification(tx, access.org.id, issuerId));
+  });
+
+  app.post('/issuers/:issuerId/domain-verification/check', async (request) => {
+    const access = requirePermission(request, 'issuer:update');
+    requireWritable(access);
+    const issuerId = uuidParam((request.params as { issuerId?: string }).issuerId, 'Issuer');
+    return checkDomain(
+      db,
+      domains,
+      { orgId: access.org.id, issuerId },
+      access.actor,
+      requestInfo(request),
+    );
   });
 };

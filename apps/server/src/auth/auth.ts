@@ -30,6 +30,23 @@ export const CLIENT_IP_HEADER = 'x-credforge-client-ip';
 
 export const AUTH_BASE_PATH = '/api/auth';
 
+/**
+ * Tighter limits for the endpoints worth guessing at or that send email (per client IP, per
+ * minute). Two-step codes: 10 tries a minute against a million codes that change every 30 s.
+ */
+export const AUTH_RATE_LIMITS: Record<string, { window: number; max: number }> = {
+  '/sign-in/email': { window: 60, max: 10 },
+  '/sign-up/email': { window: 60, max: 5 },
+  '/request-password-reset': { window: 60, max: 5 },
+  '/reset-password': { window: 60, max: 10 },
+  '/send-verification-email': { window: 60, max: 5 },
+  '/change-password': { window: 60, max: 10 },
+  '/two-factor/verify-totp': { window: 60, max: 10 },
+  '/two-factor/verify-backup-code': { window: 60, max: 10 },
+  '/two-factor/enable': { window: 60, max: 10 },
+  '/two-factor/disable': { window: 60, max: 10 },
+};
+
 /** Passwords: NIST SP 800-63B allows 8+, credforge asks for a little more. */
 export const PASSWORD_MIN_LENGTH = 10;
 export const PASSWORD_MAX_LENGTH = 128;
@@ -152,16 +169,12 @@ export function createAuth({ config, db, outbox, log }: AuthDependencies) {
     },
     telemetry: { enabled: false },
     rateLimit: {
-      // In memory: one app process (design plan §2). Off outside production.
-      enabled: config.env === 'production',
+      // Per client IP, in memory: one app process (design plan §2). On in production
+      // (AUTH_RATE_LIMIT); off in development, where the e2e tests sign up many accounts.
+      enabled: config.authRateLimit,
       window: 60,
       max: 100,
-      customRules: {
-        '/sign-in/email': { window: 60, max: 10 },
-        '/sign-up/email': { window: 60, max: 5 },
-        '/request-password-reset': { window: 60, max: 5 },
-        '/send-verification-email': { window: 60, max: 5 },
-      },
+      customRules: AUTH_RATE_LIMITS,
     },
 
     user: {

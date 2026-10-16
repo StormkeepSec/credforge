@@ -2,6 +2,8 @@ import { auditEvent, type Queryable } from '@credforge/db';
 
 export type AuditActor =
   | { type: 'user'; id: string; label: string | null }
+  /** An org's API key; the label is its name and prefix. */
+  | { type: 'api_key'; id: string; label: string | null }
   | { type: 'system'; id?: null; label?: string | null }
   /** The recipient of a credential, acting through their claim link (no account). */
   | { type: 'recipient'; id?: null; label?: string | null };

@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { ORG_ROLES, type OrgRole, type Permission } from './roles';
+import {
+  API_KEY_SCOPES,
+  type ApiKeyScope,
+  ORG_ROLES,
+  type OrgRole,
+  type Permission,
+} from './roles';
 
 // ---- shared vocabulary ----
 
@@ -55,6 +61,8 @@ export type ProblemCode =
   | 'already_revoked'
   | 'not_a_credential'
   | 'rate_limited'
+  | 'api_key_not_allowed'
+  | 'no_website'
   | 'internal_error';
 
 export interface Problem {
@@ -351,6 +359,12 @@ export const awardInput = z.object({
 });
 export type AwardInput = z.input<typeof awardInput>;
 
+/** What the award email would say (the award form's preview); signs nothing. */
+export const awardPreviewInput = z.object({
+  achievementId: z.uuid('Choose an achievement'),
+  recipient: z.object({ name: z.string().trim().max(200).optional() }).optional(),
+});
+
 /**
  * Where a credential stands for its holder: computed from its status and dates ("expired" is
  * never stored).
@@ -512,6 +526,12 @@ export const createBatchFromRowsInput = z.object({
 });
 export type CreateBatchFromRowsInput = z.input<typeof createBatchFromRowsInput>;
 
+/** The query of `POST …/batches` with a CSV file as the raw body: the achievement and file name. */
+export const batchCsvQuery = z.object({
+  achievementId: z.uuid('Choose an achievement'),
+  fileName: z.string().trim().max(200).optional(),
+});
+
 export const batchesQuery = z.object({
   before: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -546,6 +566,26 @@ export const verifyInput = z
     { message: 'Give a URL, the credential’s JSON, or a badge image', path: ['url'] },
   );
 export type VerifyInput = z.input<typeof verifyInput>;
+
+// ---- API keys (design plan §10, §12) ----
+
+export const createApiKeyInput = z.object({
+  /** What the key is for, e.g. "LMS integration". */
+  name: text(100),
+  scopes: z
+    .array(z.enum(API_KEY_SCOPES, { error: 'Choose what the key may do' }))
+    .min(1, 'Choose at least one permission')
+    .transform((scopes) => [...new Set(scopes)]),
+  /** Days until the key stops working; null or left out for no expiry. */
+  expiresInDays: z
+    .number({ error: 'Enter a number of days' })
+    .int('Enter a whole number of days')
+    .min(1, 'At least 1 day')
+    .max(730, 'At most 2 years')
+    .nullable()
+    .optional(),
+});
+export type CreateApiKeyInput = z.input<typeof createApiKeyInput>;
 
 export const auditEventsQuery = z.object({
   before: z.coerce.number().int().positive().optional(),
@@ -668,12 +708,23 @@ export interface ImageSet {
   height: number | null;
 }
 
+/** Whether the issuer has proven it controls its website's domain (design plan §6.3). */
+export interface DomainStatus {
+  /** The website's host, e.g. `example.org`. */
+  host: string;
+  /** When it was verified; null while the website is self-reported. */
+  verifiedAt: string | null;
+  method: 'dns' | 'file' | null;
+}
+
 export interface Issuer {
   id: string;
   /** The permanent issuer id embedded in credentials: `{PUBLIC_BASE_URL}/issuers/{id}`. */
   url: string;
   name: string;
   website: string | null;
+  /** Null when there is no website. */
+  domain: DomainStatus | null;
   email: string | null;
   description: string | null;
   logo: ImageSet | null;
@@ -682,11 +733,49 @@ export interface Issuer {
   updatedAt: string;
 }
 
+/**
+ * How to prove control of the website's domain: publish `value` in a DNS TXT record at
+ * `dnsName`, or serve it as the whole content of `fileUrl`. Either one is enough.
+ */
+export interface DomainVerification extends DomainStatus {
+  value: string;
+  dnsName: string;
+  fileUrl: string;
+  /** The last check, if there was one. */
+  lastCheckedAt: string | null;
+}
+
+/** The result of checking now. */
+export interface DomainCheckResult {
+  verified: boolean;
+  /** What was found where, for each method, in plain words. */
+  findings: { method: 'dns' | 'file'; found: boolean; detail: string }[];
+  domain: DomainVerification;
+}
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  /** The key's first part, `cf_{prefix}`, to recognize it; the rest is never shown again. */
+  prefix: string;
+  scopes: ApiKeyScope[];
+  createdBy: { id: string; name: string } | null;
+  createdAt: string;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+/** A new key: `key` is shown only in this response. */
+export interface CreatedApiKey extends ApiKey {
+  key: string;
+}
+
 export interface PlatformOrg extends OrgSummary {
   approvedAt: string | null;
   requestedBy: { name: string; email: string } | null;
   memberCount: number;
-  issuers: { id: string; name: string; website: string | null }[];
+  issuers: { id: string; name: string; website: string | null; domainVerified: boolean }[];
   /** This org's own limit; null uses the instance default. */
   dailySendLimit: number | null;
   /** The instance default (DEFAULT_ORG_DAILY_SEND_LIMIT); 0 means no limit. */

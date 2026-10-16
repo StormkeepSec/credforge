@@ -9,6 +9,7 @@
 .idea
 .env
 .env.*
+backup.env
 secrets
 data
 branding

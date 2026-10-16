@@ -36,6 +36,13 @@
       "when": 1792079887205,
       "tag": "0004_batches_revocation",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792110757311,
+      "tag": "0005_hardening",
+      "breakpoints": true
     }
   ]
 }

@@ -14,6 +14,8 @@ e2e/playwright-report/
 .env.*
 !.env.example
 !.env.development.example
+# The backup bucket key (deploy/backup.sh); the template is backup.env.example
+backup.env
 secrets/
 
 # Local data

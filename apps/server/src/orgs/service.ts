@@ -1,4 +1,4 @@
-import type { OrgDetails, OrgSummary } from '@credforge/contracts';
+import type { OrgDetails, OrgRole, OrgSummary } from '@credforge/contracts';
 import {
   and,
   type Database,
@@ -26,11 +26,14 @@ export function serializeOrgSummary(row: OrgRow): OrgSummary {
   };
 }
 
-export function serializeOrgDetails(access: OrgAccess, defaultDailySendLimit: number): OrgDetails {
+export function serializeOrgDetails(
+  access: Pick<OrgAccess, 'org' | 'permissions'> & { member: { role: OrgRole } },
+  defaultDailySendLimit: number,
+): OrgDetails {
   return {
     ...serializeOrgSummary(access.org),
     approvedAt: access.org.approvedAt?.toISOString() ?? null,
-    role: access.role,
+    role: access.member.role,
     permissions: [...access.permissions],
     dailySendLimit: effectiveDailySendLimit(access.org.dailySendLimit, defaultDailySendLimit),
   };

@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { createRateLimiter } from '../api/rate-limit';
 import type { Services } from '../services';
 import {
   type SendGridEvent,
@@ -20,6 +21,10 @@ export const sendgridWebhookRoutes: FastifyPluginAsync<{
   const publicKey = config.email.sendgridWebhookPublicKey;
   if (!publicKey) return;
 
+  // Requests with a bad signature, per client IP: SendGrid's own requests are never limited,
+  // but someone posting junk is turned away before more signature checks.
+  const rejected = createRateLimiter({ max: 20, windowMs: 60_000 });
+
   // The signature covers the body exactly as sent, so keep the raw bytes.
   app.removeContentTypeParser('application/json');
   app.addContentTypeParser(
@@ -29,6 +34,9 @@ export const sendgridWebhookRoutes: FastifyPluginAsync<{
   );
 
   app.post('/api/webhooks/sendgrid', async (request, reply) => {
+    if (rejected.peek(`webhook:${request.ip}`) === 'limited') {
+      return reply.code(429).header('retry-after', '60').send({ error: 'too many bad requests' });
+    }
     const raw = request.body;
     const signature = request.headers[SIGNATURE_HEADER];
     const timestamp = request.headers[TIMESTAMP_HEADER];
@@ -42,6 +50,7 @@ export const sendgridWebhookRoutes: FastifyPluginAsync<{
       )
     ) {
       request.log.warn('SendGrid webhook: bad or missing signature');
+      rejected.take(`webhook:${request.ip}`);
       return reply.code(403).send({ error: 'invalid signature' });
     }
 

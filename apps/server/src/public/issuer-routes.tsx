@@ -2,6 +2,7 @@ import { asc, eq, issuer, organization, signingKey } from '@credforge/db';
 import type { FastifyPluginAsync } from 'fastify';
 import { isUuid } from '../api/errors';
 import { imageSet, loadFiles } from '../files/service';
+import { verifiedHost } from '../issuers/domain';
 import { issuerProfileDocument, issuerUrl } from '../issuers/service';
 import type { Services } from '../services';
 import type { PublicAssets } from './assets';
@@ -66,7 +67,9 @@ export const publicIssuerRoutes: FastifyPluginAsync<{
               website: row.issuer.url,
               email: row.issuer.email,
               logoUrl: logo ? imageSet(config.publicBaseUrl, logo).url512 : null,
+              verifiedHost: verifiedHost(row.issuer),
             }}
+            reportEmail={config.abuseEmail}
             orgStatus={row.orgStatus}
             keyCount={keys.filter((key) => key.status !== 'revoked').length}
           />,

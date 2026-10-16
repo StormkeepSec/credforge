@@ -30,6 +30,7 @@ import { CredentialDetailPage, CredentialsPage } from './pages/credentials';
 import { InvitePage } from './pages/invite';
 import { LoginPage } from './pages/login';
 import { NewOrgPage } from './pages/new-org';
+import { OrgApiKeysPage } from './pages/org-api-keys';
 import { OrgIssuerPage } from './pages/org-issuer';
 import { OrgMembersPage } from './pages/org-members';
 import { OrgOverviewPage } from './pages/org-overview';
@@ -324,6 +325,14 @@ const orgSettingsRoute = createRoute({
   },
 });
 
+const orgApiKeysRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: '/api-keys',
+  component: function ApiKeys() {
+    return <OrgApiKeysPage orgId={useOrgId()} />;
+  },
+});
+
 const accountRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/settings',
@@ -372,6 +381,7 @@ const routeTree = rootRoute.addChildren([
       orgIssuerRoute,
       orgMembersRoute,
       orgSettingsRoute,
+      orgApiKeysRoute,
     ]),
     accountRoute,
     twoFactorSetupRoute,

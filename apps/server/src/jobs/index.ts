@@ -13,6 +13,7 @@ import {
 import type { DeliveryTracker } from '../email/tracking';
 import type { EmailMessage, EmailTransport } from '../email/transport';
 import type { Storage } from '../files/storage';
+import { type DomainChecker, recheckVerifiedDomains } from '../issuers/domain';
 import { listsWaitingToPublish, publishStatusList } from '../status-lists/service';
 import type { JobQueue } from './enqueue';
 import { QUEUES } from './queues';
@@ -51,6 +52,8 @@ export interface IssuingDependencies {
   outbox: EmailOutbox;
   storage: Storage;
   jobs: JobQueue;
+  /** Re-checks verified issuer domains once a day (design plan §6.3). */
+  domains?: DomainChecker;
 }
 
 export interface JobDependencies {
@@ -119,5 +122,9 @@ export async function registerJobs(
     }
     const deleted = await deleteOldImports(db, storage);
     if (deleted > 0) log.info({ deleted }, 'deleted old CSV uploads');
+    if (issuing.domains) {
+      const domains = await recheckVerifiedDomains(db, issuing.domains, { limit: 5 });
+      if (domains.checked > 0) log.info(domains, 're-checked verified issuer domains');
+    }
   });
 }

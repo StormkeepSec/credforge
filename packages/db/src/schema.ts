@@ -232,7 +232,41 @@ export const invitation = pgTable(
   ],
 );
 
+// ---- API keys ----
+
+/**
+ * Keys for integrations (design plan §10, §12). A key is `cf_{prefix}_{secret}`: the prefix finds
+ * the row, and only the SHA-256 of the whole key is stored. It is shown once, when it is created.
+ * Keys belong to the org, not to the member who created them.
+ */
+export const apiKey = pgTable(
+  'api_key',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organization.id),
+    name: text('name').notNull(),
+    prefix: text('prefix').notNull().unique(),
+    /** Hex SHA-256 of the whole key. */
+    keyHash: text('key_hash').notNull(),
+    /** Permissions the key holds (a subset of `API_KEY_SCOPES` in the contracts). */
+    scopes: jsonb('scopes').$type<string[]>().notNull(),
+    createdBy: uuid('created_by').references(() => user.id, { onDelete: 'set null' }),
+    expiresAt: timestamptz('expires_at'),
+    /** Updated at most once a minute. */
+    lastUsedAt: timestamptz('last_used_at'),
+    lastUsedIp: text('last_used_ip'),
+    revokedAt: timestamptz('revoked_at'),
+    revokedBy: uuid('revoked_by').references(() => user.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (table) => [index('api_key_org_idx').on(table.orgId, table.createdAt)],
+);
+
 // ---- Issuers ----
+
+export const DOMAIN_VERIFICATION_METHODS = ['dns', 'file'] as const;
 
 /** An OB `Profile`. Its id is public and permanent: `{PUBLIC_BASE_URL}/issuers/{id}`. */
 export const issuer = pgTable(
@@ -244,16 +278,39 @@ export const issuer = pgTable(
       .references(() => organization.id),
     name: text('name').notNull(),
     description: text('description'),
-    /** The issuer's own website (self-reported until domain verification, M5). */
+    /** The issuer's own website: self-reported unless its domain is verified. */
     url: text('url'),
     /** Public contact address. */
     email: text('email'),
     /** The logo (a `file` of kind `issuer_logo`), embedded in the profile and in credentials. */
     imageFileId: uuid('image_file_id').references((): AnyPgColumn => file.id),
+    /**
+     * Domain verification (design plan §6.3). `domain_token` is what the issuer publishes in a DNS
+     * TXT record or at `/.well-known/credforge-verify.txt`; `domain` is the website host it was
+     * proven for. Changing the website to another host clears the proof.
+     */
+    domainToken: text('domain_token'),
+    domain: text('domain'),
+    domainVerifiedAt: timestamptz('domain_verified_at'),
+    domainVerificationMethod: text('domain_verification_method', {
+      enum: DOMAIN_VERIFICATION_METHODS,
+    }),
+    /** The last re-check, and how many in a row failed (verification lapses after a few). */
+    domainCheckedAt: timestamptz('domain_checked_at'),
+    domainCheckFailures: integer('domain_check_failures').notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (table) => [index('issuer_org_id_idx').on(table.orgId)],
+  (table) => [
+    index('issuer_org_id_idx').on(table.orgId),
+    index('issuer_domain_verified_idx')
+      .on(table.domainCheckedAt)
+      .where(sql`${table.domainVerifiedAt} is not null`),
+    check(
+      'issuer_domain_verification_method_check',
+      sql`"domain_verification_method" is null or ${oneOf(table.domainVerificationMethod, DOMAIN_VERIFICATION_METHODS)}`,
+    ),
+  ],
 );
 
 export const SIGNING_KEY_STATUS_VALUES = ['active', 'retired', 'revoked'] as const;
@@ -554,7 +611,8 @@ export const issuanceBatch = pgTable(
     error: text('error'),
     createdByType: text('created_by_type', { enum: ['user', 'api_key'] }).notNull(),
     createdById: text('created_by_id'),
-    /** Who confirmed it: the worker issues its credentials on their behalf. */
+    /** Who confirmed it (a user or an API key): the worker issues on their behalf. */
+    confirmedByType: text('confirmed_by_type', { enum: ['user', 'api_key'] }),
     confirmedById: text('confirmed_by_id'),
     confirmedAt: timestamptz('confirmed_at'),
     startedAt: timestamptz('started_at'),
@@ -570,6 +628,10 @@ export const issuanceBatch = pgTable(
     check('issuance_batch_status_check', oneOf(table.status, BATCH_STATUS_VALUES)),
     check('issuance_batch_source_check', oneOf(table.source, BATCH_SOURCE_VALUES)),
     check('issuance_batch_created_by_type_check', oneOf(table.createdByType, ['user', 'api_key'])),
+    check(
+      'issuance_batch_confirmed_by_type_check',
+      sql`"confirmed_by_type" is null or ${oneOf(table.confirmedByType, ['user', 'api_key'])}`,
+    ),
   ],
 );
 

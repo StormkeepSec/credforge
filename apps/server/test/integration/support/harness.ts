@@ -6,6 +6,7 @@ import { createDatabase, grantAppRole, migrateDatabase } from '@credforge/db';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import { inject } from 'vitest';
+import { operationFor } from '../../../src/api/operations';
 import { buildApp } from '../../../src/app';
 import { createAuth } from '../../../src/auth/auth';
 import { loadConfig } from '../../../src/config';
@@ -13,8 +14,10 @@ import { createKeyEncryption } from '../../../src/crypto/key-encryption';
 import { createMemoryOutbox, createQueueOutbox, type EmailOutbox } from '../../../src/email/outbox';
 import type { EmailMessage } from '../../../src/email/transport';
 import { createLocalStorage } from '../../../src/files/storage';
+import type { DomainChecker } from '../../../src/issuers/domain';
 import { createQueues } from '../../../src/jobs';
 import { createQueueClient } from '../../../src/queue';
+import { FetchError } from '../../../src/verify/fetch';
 
 const MIGRATIONS_DIR = resolve(import.meta.dirname, '../../../../../packages/db/migrations');
 export const BASE_URL = 'https://credforge.test';
@@ -112,13 +115,38 @@ export async function createTestEnvironment(
     config.storage.driver === 'local' ? config.storage.localDir : mkdtempSync(join(tmpdir(), 'x')),
   );
   const routes: { method: string; url: string }[] = [];
+  // What the domain checker "finds": TXT records by name, file bodies by URL.
+  const domainProof = { txt: new Map<string, string[]>(), files: new Map<string, string>() };
+  const domains: DomainChecker = {
+    async txt(name) {
+      return domainProof.txt.get(name) ?? [];
+    },
+    async file(fileUrl) {
+      const body = domainProof.files.get(fileUrl);
+      if (body === undefined) throw new FetchError('The site answered 404.');
+      return body;
+    },
+  };
+  // Every JSON response from /api/v1 must match its schema in the OpenAPI document.
+  const schemaMismatches: string[] = [];
   const app = await buildApp({
     config,
     logger: false,
     checkDatabase: async () => {
       await pool.query('select 1');
     },
-    services: { config, db, auth, outbox, keys, storage },
+    services: { config, db, auth, outbox, keys, storage, domains },
+    onApiResponse: (request, reply, payload) => {
+      const op = operationFor(request.method, request.routeOptions.url ?? '');
+      const response = op?.responses.find((item) => item.status === reply.statusCode);
+      if (!op || !response?.schema || response.contentType || typeof payload !== 'string') return;
+      const result = response.schema.safeParse(JSON.parse(payload));
+      if (!result.success) {
+        schemaMismatches.push(
+          `${request.method} ${request.routeOptions.url} ${reply.statusCode}: ${result.error.message}`,
+        );
+      }
+    },
     onRoute: (route) => {
       for (const method of [route.method].flat()) routes.push({ method, url: route.url });
     },
@@ -141,6 +169,11 @@ export async function createTestEnvironment(
     storage,
     /** The job queue client, with `{ queue: true }`. */
     boss,
+    /** DNS records and files the domain checker finds (domain verification). */
+    domainProof,
+    domainChecker: domains,
+    /** /api/v1 responses that didn't match their OpenAPI schema. */
+    schemaMismatches,
     async close() {
       await app.close();
       await boss?.stop({ graceful: false });
@@ -151,6 +184,11 @@ export async function createTestEnvironment(
       await cleanup.query(`drop database if exists ${database} with (force)`);
       await cleanup.query(`drop role if exists ${appRole}`);
       await cleanup.end();
+      if (schemaMismatches.length > 0) {
+        throw new Error(
+          `API responses don't match the OpenAPI document:\n${schemaMismatches.join('\n')}`,
+        );
+      }
     },
   };
 }

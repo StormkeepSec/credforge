@@ -1,9 +1,11 @@
 import { parseArgs } from 'node:util';
 import { emailField } from '@credforge/contracts';
-import { createDatabase, eq, statusList, user } from '@credforge/db';
+import { and, createDatabase, credential, eq, organization, statusList, user } from '@credforge/db';
+import { z } from 'zod';
 import { recordAudit } from './audit/audit';
 import { createAuth } from './auth/auth';
 import { loadConfigOrExit } from './config';
+import { revokeCredentials } from './credentials/revocation';
 import { createKeyEncryption } from './crypto/key-encryption';
 import { loadDevEnvFile } from './dev-env';
 import { createMemoryOutbox } from './email/outbox';
@@ -15,6 +17,7 @@ Usage:
   node dist/cli.js create-platform-admin --email <address> [--name <name>]
   node dist/cli.js remove-platform-admin --email <address>
   node dist/cli.js publish-status-lists [--all]
+  node dist/cli.js revoke-org-credentials --org <id> --reason <text> [--public-reason <text>] [--yes]
 
 Commands:
   create-platform-admin   Make a user a platform admin (approves and suspends organizations).
@@ -24,6 +27,9 @@ Commands:
   publish-status-lists    Re-sign and publish status lists with revocations not yet published
                           (the worker does this within seconds; use it if the worker was down).
                           --all re-signs every list.
+  revoke-org-credentials  Revoke every badge a suspended organization awarded (abuse: phishing,
+                          impersonation). Suspend it on the Platform screen first. Without --yes
+                          it only says how many badges it would revoke.
 
 In docker compose:  docker compose exec app node dist/cli.js create-platform-admin --email you@example.org`;
 
@@ -181,6 +187,82 @@ async function publishStatusLists(args: string[]) {
   }
 }
 
+/** Abuse (design plan §6.3): revokes everything a suspended org awarded, then re-signs its lists. */
+async function revokeOrgCredentials(args: string[]) {
+  const { values } = parseArgs({
+    args,
+    options: {
+      org: { type: 'string' },
+      reason: { type: 'string' },
+      'public-reason': { type: 'string' },
+      yes: { type: 'boolean' },
+    },
+  });
+  const orgId = z.uuid().safeParse(values.org ?? '');
+  const reason = values.reason?.trim();
+  if (!orgId.success || !reason) {
+    console.error('Give the organization with --org <id> and a --reason.\n');
+    console.error(USAGE);
+    return 2;
+  }
+  const config = loadConfigOrExit();
+  const { db, pool } = createDatabase(config.databaseUrl, {
+    applicationName: 'credforge-cli',
+    max: 2,
+  });
+  try {
+    const [org] = await db.select().from(organization).where(eq(organization.id, orgId.data));
+    if (!org) {
+      console.error('No organization with that id.');
+      return 1;
+    }
+    if (org.status !== 'suspended') {
+      console.error(`${org.name} is ${org.status}. Suspend it on the Platform screen first.`);
+      return 1;
+    }
+    const issued = and(eq(credential.orgId, org.id), eq(credential.status, 'issued'));
+    const total = (await db.select({ id: credential.id }).from(credential).where(issued)).length;
+    if (!values.yes) {
+      console.log(
+        `${org.name} has ${total} badges that aren't revoked. Run again with --yes to revoke them.`,
+      );
+      return total === 0 ? 0 : 1;
+    }
+    const services = {
+      db,
+      config,
+      keys: createKeyEncryption(config.masterKey),
+      outbox: createMemoryOutbox(),
+    };
+    let revoked = 0;
+    for (;;) {
+      const ids = (
+        await db.select({ id: credential.id }).from(credential).where(issued).limit(500)
+      ).map((row) => row.id);
+      if (ids.length === 0) break;
+      const result = await revokeCredentials(
+        services,
+        org.id,
+        ids,
+        { reason, publicReason: values['public-reason']?.trim() || null },
+        CLI_ACTOR,
+        {},
+      );
+      revoked += result.revoked.length;
+    }
+    let published = 0;
+    for (const id of await listsWaitingToPublish(db)) {
+      if (await publishStatusList(services, id)) published++;
+    }
+    console.log(
+      `Revoked ${revoked} badges of ${org.name} and re-signed ${published} status lists.`,
+    );
+    return 0;
+  } finally {
+    await pool.end();
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
   loadDevEnvFile();
   const [command, ...rest] = argv;
@@ -191,6 +273,8 @@ async function main(argv: string[]): Promise<number> {
       return removePlatformAdmin(rest);
     case 'publish-status-lists':
       return publishStatusLists(rest);
+    case 'revoke-org-credentials':
+      return revokeOrgCredentials(rest);
     case undefined:
     case 'help':
     case '--help':

@@ -7,6 +7,8 @@
 export interface RateLimiter {
   /** Counts one request; says whether it is allowed and, if not, in how many seconds to retry. */
   take(key: string, now?: number): { allowed: true } | { allowed: false; retryAfter: number };
+  /** Whether a key is over its limit, without counting a request. */
+  peek(key: string, now?: number): 'ok' | 'limited';
 }
 
 const MAX_KEYS = 50_000;
@@ -37,6 +39,11 @@ export function createRateLimiter(options: { max: number; windowMs: number }): R
         };
       }
       return { allowed: true };
+    },
+    peek(key, now = Date.now()) {
+      if (options.max <= 0) return 'ok';
+      const window = windows.get(key);
+      return window && window.resetAt > now && window.count >= options.max ? 'limited' : 'ok';
     },
   };
 }

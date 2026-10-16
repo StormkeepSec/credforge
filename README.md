@@ -6,8 +6,11 @@
 > **Status:** early development. M0 (foundations), M1 (the credential engine in `packages/ob3`),
 > M2 (accounts, organizations and issuers), M3 (achievements, awarding one badge, delivery and the
 > public badge pages) and M4 (awarding many from a CSV file, revoking and reissuing, the
-> verification tool, search and exports) are done. See the [design plan](docs/design-plan.md) for
-> the architecture and the roadmap.
+> verification tool, search and exports) are done. M5's hardening is done (API keys and API docs,
+> rate limits, abuse reports, domain verification, security headers, the landing page, draft
+> privacy policy and terms, encrypted nightly backups with a tested restore); deploying to
+> credforge.app is next. See the [design plan](docs/design-plan.md) for the architecture and the
+> roadmap.
 
 ## Requirements
 
@@ -49,6 +52,17 @@ Then the rest of M4:
   or a baked badge image, optionally against an email address. The same checks are
   `POST /api/v1/verify`.
 
+And M5:
+
+- **API keys** (sidebar → API keys, owners and admins): create a key with only the permissions an
+  integration needs; it is shown once. Send it as `Authorization: Bearer cf_…`. The interactive
+  API documentation is at **http://localhost:5173/api/docs** (the OpenAPI 3.1 document at
+  `/api/v1/openapi.json`).
+- **Website verification** (Issuer profile): publish a DNS TXT record or a file on the issuer's
+  website; public pages then say "Website verified" instead of "self-reported".
+- **Public pages:** the landing page at `/`, `/privacy` and `/terms` (drafts for review), and
+  "Report a problem" on badge, achievement and issuer pages.
+
 No configuration is needed for development. To override a default (for example to try Google or
 Microsoft sign-in with development OAuth clients), copy `.env.development.example` to
 `.env.development`.
@@ -72,6 +86,7 @@ two-step verification (TOTP) before they can continue, whichever way they sign i
 | `pnpm db:migrate` | Apply migrations to the development database |
 | `pnpm infra:down` | Stop PostgreSQL and Mailpit (data is kept) |
 | `pnpm --filter @credforge/server cli publish-status-lists` | Re-sign status lists with revocations the worker hasn't published yet (`--all` for every list) |
+| `pnpm --filter @credforge/server cli revoke-org-credentials --org <id> --reason …` | Revoke every badge of a suspended organization (abuse); without `--yes` it only counts them |
 
 ### Tests
 
@@ -79,7 +94,10 @@ two-step verification (TOTP) before they can continue, whichever way they sign i
 PostgreSQL: Testcontainers starts `postgres:18-alpine`, so **Docker must be running**. To use an
 existing server instead, set `TEST_DATABASE_URL` to a superuser connection string; each test file
 creates and drops its own database there. The integration suite includes a cross-tenant test that
-tries every organization-scoped endpoint against another organization's data. Batches, revocation
+tries every organization-scoped endpoint against another organization's data (with a session and
+with an API key), and every JSON response from `/api/v1` in every test is checked against its
+schema in the OpenAPI document; another test fails if a route is missing from the document. Domain
+verification uses a stand-in for DNS and HTTPS lookups. Batches, revocation
 and the worker's jobs are tested by running the job functions directly against the test database;
 verification of other issuers' credentials uses a stand-in fetcher that serves the
 `packages/ob3` sample issuer.
@@ -101,7 +119,10 @@ Mailpit as the recipient, checks the public badge page, certificate and achievem
 verifies the downloaded baked PNG with `@credforge/ob3`. The M4 tests upload a CSV file and go
 through the column mapping, the validation report, awarding, progress and results (the worker must
 be running), search and filter the awarded badges, open the bulk revoke panel and the reissue form,
-revoke a badge and check its public page, and use the `/verify` page.
+revoke a badge and check its public page, and use the `/verify` page. The M5 tests create an API
+key (shown once), use it without cookies, revoke it, open the website verification instructions,
+and check the landing page, the draft privacy policy and terms, the "Report a problem" link and the
+API docs (no CSP errors).
 Any violation fails the test. It also checks keyboard behaviour that broke before: the mobile menu
 takes focus, keeps Tab inside it and returns focus on Escape, its organization switcher is
 labelled, cancelling a confirm button returns focus to it, and step changes move focus to the new
@@ -167,7 +188,46 @@ This starts `db`, runs `migrate` once, and then starts `app` and `worker`. The a
 - **Google and Microsoft sign-in** turn on when their client ID and secret are set. Redirect URIs
   are `{PUBLIC_BASE_URL}/api/auth/callback/google` and `…/callback/microsoft`. For Microsoft, add
   the optional ID token claim `xms_edov`; without it credforge sends its own confirmation email
-  before a Microsoft account can be used.
+  before a Microsoft account can be used. Google's consent screen needs the privacy policy and
+  terms URLs: `{PUBLIC_BASE_URL}/privacy` and `/terms`.
+- **Rate limits** (in memory, per minute): sign-in, sign-up, password reset and two-step codes per
+  client IP (on in production, `AUTH_RATE_LIMIT`), claim and invitation links per client IP
+  (`CLAIM_RATE_LIMIT`, 30), verification per client IP (`VERIFY_RATE_LIMIT`, 20) and each API key
+  (`API_RATE_LIMIT`, 300). Over a limit: `429` with `Retry-After`. `/status/` is never limited.
+- **Contacts and legal pages.** `ABUSE_EMAIL` adds "Report a problem" to public pages,
+  `SECURITY_EMAIL` serves `/.well-known/security.txt`, and `OPERATOR_NAME` and `PRIVACY_EMAIL`
+  fill in `/privacy` and `/terms`. Those pages are drafts, and say so, until you review them and
+  set `LEGAL_PAGES_DRAFT=false`. Inbound mail for these addresses needs an MX host: SendGrid only
+  sends.
+- **Backups.** `deploy/backup.sh` (nightly with the systemd timer in `deploy/systemd/`) dumps the
+  database, encrypts it with a key derived from `CREDFORGE_MASTER_KEY` and uploads it to its own
+  bucket with its own key (`backup.env`, from `backup.env.example`); `deploy/restore.sh` restores
+  one. Setup, the restore procedure and the drill that was run are in
+  [docs/restore-drill.md](docs/restore-drill.md).
+- **Logs** are rotated by Docker (5 × 10 MB per container). Secrets in URLs (claim, reset,
+  confirmation and invitation links, OAuth codes) and the addresses checked with `/verify` are
+  removed from request logs.
+
+### Deploy to a server
+
+[docs/deployment.md](docs/deployment.md) is the whole procedure for credforge.app (a DigitalOcean
+droplet behind your own nginx): preparing the droplet, DNS and the CAA record, the production
+`.env`, nginx and TLS, the first platform admin, Google and Microsoft sign-in, the SendGrid Event
+Webhook, backups and the 1EdTech validator check.
+
+Images are built on your machine and streamed to the server over SSH, with no registry:
+
+```bash
+deploy/ship.sh you@your-server     # or an ~/.ssh/config alias; --help lists the options
+```
+
+It checks the server, builds `credforge:<date>-<commit>` for `linux/amd64`, sends it with
+`docker save | gzip | ssh … docker load`, copies `docker-compose.yml` and the backup scripts to
+`/opt/credforge`, runs the migration and then restarts `app` and `worker`, and waits until the
+app is ready. It never reads `.env`, which stays on the server. `--no-build --tag <older tag>`
+rolls back to an image the server still has. `deploy/nginx.conf.example` is a matching nginx
+site (TLS, redirects, HSTS, `client_max_body_size`, image caching, a flood guard that leaves
+`/status/` alone).
 
 ### Email and storage for credforge.app
 
@@ -199,19 +259,24 @@ work. Values in angle brackets come from the SendGrid and DigitalOcean control p
 
 **DigitalOcean Spaces** (in the droplet's region)
 
-1. Buckets: `credforge-prod` (File Listing **restricted**, no CDN, no CORS needed) and
+1. Buckets: `credforge-prod` (File Listing **restricted**, no CDN, no CORS needed),
+   `credforge-backups` for the nightly database backups (File Listing restricted), and
    `credforge-dev` for development and the driver's integration tests. Turn on versioning for
    `credforge-prod` (`aws s3api put-bucket-versioning --bucket credforge-prod
    --versioning-configuration Status=Enabled --endpoint-url https://<region>.digitaloceanspaces.com`).
 2. **Limited access keys** (API → Spaces Keys): one with Read/Write/Delete on `credforge-prod`
-   only → `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (or `_FILE`); one on `credforge-dev` only
-   for development (`S3_TEST_*`).
+   only → `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (or `_FILE`); one with Read/Write/Delete on
+   `credforge-backups` only → `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY` in
+   `backup.env` (not `.env`); one on `credforge-dev` only for development (`S3_TEST_*`).
 3. `S3_ENDPOINT=https://<region>.digitaloceanspaces.com`, `S3_REGION=<region>`,
-   `S3_BUCKET=credforge-prod`.
+   `S3_BUCKET=credforge-prod`; `BACKUP_S3_BUCKET=credforge-backups` in `backup.env` (the backups
+   use the same endpoint and region). The backup script deletes backups after 30 days
+   (`BACKUP_RETENTION_DAYS`), keeping the newest 7, so no lifecycle rule is needed.
 
 No DNS record is needed for Spaces. nginx in front of the app needs `client_max_body_size 10m`
 (image uploads, CSV files up to 5 MB, webhook batches) and must not rate-limit `/status/`:
-validators fetch the status list for every check (the 1EdTech validator about 10 times). Uploaded
+validators fetch the status list for every check (the 1EdTech validator about 10 times).
+`deploy/nginx.conf.example` does both. Uploaded
 CSV files are kept privately under `orgs/{orgId}/imports/` for 30 days; exports are streamed and
 never stored.
 
@@ -225,7 +290,9 @@ packages/db         Database schema and SQL migrations (Drizzle ORM)
 packages/ob3        Credential engine: build, sign, verify, bake and status lists for Open Badges 3.0
 packages/ui         Brand tokens (Tailwind CSS theme)
 e2e/                End-to-end accessibility tests of the issuer app (Playwright + axe)
-docs/               Design plan and other documentation
+deploy/             ship.sh (build here, deploy over SSH), the nginx example, backup and restore
+                    scripts, the systemd timer for the nightly backup
+docs/               Design plan, deployment guide, backups and the restore drill
 branding/           Brand guide, copy kit and logo assets
 ```
 

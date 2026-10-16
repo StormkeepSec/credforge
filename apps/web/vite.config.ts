@@ -14,6 +14,9 @@ const serverPaths = [
   '/credentials',
   '/status',
   '/verify',
+  '/privacy',
+  '/terms',
+  '/.well-known',
 ];
 
 export default defineConfig({
