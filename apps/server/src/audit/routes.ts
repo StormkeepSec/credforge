@@ -2,10 +2,14 @@ import { type AuditEventPage, auditEventsQuery } from '@credforge/contracts';
 import { and, auditEvent, desc, eq, lt } from '@credforge/db';
 import type { FastifyPluginAsync } from 'fastify';
 import { parse } from '../api/errors';
+import { openAuditEvents } from '../audit/audit';
 import { requirePermission } from '../orgs/access';
 import type { Services } from '../services';
 
-/** `GET /api/v1/orgs/:orgId/audit-events`: newest first, paged with `before`. */
+/**
+ * `GET /api/v1/orgs/:orgId/audit-events`: newest first, paged with `before`. Recipient details are
+ * opened with their credentials' keys, or marked erased (design plan §12.1).
+ */
 export const auditRoutes: FastifyPluginAsync<{ services: Services }> = async (
   app,
   { services },
@@ -23,7 +27,7 @@ export const auditRoutes: FastifyPluginAsync<{ services: Services }> = async (
       )
       .orderBy(desc(auditEvent.id))
       .limit(limit + 1);
-    const page = rows.slice(0, limit);
+    const page = await openAuditEvents(db, access.org.id, rows.slice(0, limit));
     return {
       events: page.map((row) => ({
         id: row.id,

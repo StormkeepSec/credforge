@@ -1,6 +1,7 @@
 import { connectionUser, createDatabase, grantAppRole, migrateDatabase } from '@credforge/db';
 import { PgBoss } from 'pg-boss';
 import { pino } from 'pino';
+import { sealEarlierAuditEvents } from './audit/seal-earlier-events';
 import { loadConfigOrExit } from './config';
 import { createKeyEncryption } from './crypto/key-encryption';
 import { loadDevEnvFile } from './dev-env';
@@ -8,8 +9,9 @@ import { enforceMasterKey, enforcePublicBaseUrl } from './instance';
 import { createQueues } from './jobs';
 import { loggerOptions } from './logger';
 
-// One-shot, as the database owner (MIGRATION_DATABASE_URL): applies database migrations,
-// installs or upgrades the job queue schema, (re)grants the app's restricted role, and records
+// One-shot, as the database owner (MIGRATION_DATABASE_URL): applies database migrations (and,
+// once, seals recipient details in audit events written before migration 0006), installs or
+// upgrades the job queue schema, (re)grants the app's restricted role, and records
 // PUBLIC_BASE_URL and the master key check. Runs before `app` and `worker` start (docker compose
 // `migrate` service).
 loadDevEnvFile();
@@ -23,6 +25,10 @@ const { db, pool } = createDatabase(config.migrationDatabaseUrl, {
 try {
   await migrateDatabase(db, config.migrationsDir);
   log.info({ migrationsDir: config.migrationsDir }, 'database migrations applied');
+  const sealed = await sealEarlierAuditEvents(pool);
+  if (sealed !== null) {
+    log.info({ events: sealed }, 'recipient details in earlier audit events sealed (once)');
+  }
 
   const boss = new PgBoss({
     connectionString: config.migrationDatabaseUrl,

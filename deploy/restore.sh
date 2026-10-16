@@ -7,9 +7,10 @@
 #   deploy/restore.sh list                           list the backups in the bucket
 #
 # It REPLACES the stack's database: stops app and worker, drops and recreates the database,
-# restores the dump in one transaction, then starts the stack (migrate re-creates the app's
-# database role and its grants). CREDFORGE_MASTER_KEY in .env must be the key the backup was
-# made with: it decrypts the backup and every issuer's signing key.
+# restores the dump in one transaction, migrates (which re-creates the app's database role and
+# its grants), erases again every recipient erased since the backup was taken (their erasure
+# records are in the files bucket), then starts the stack. CREDFORGE_MASTER_KEY in .env must be
+# the key the backup was made with: it decrypts the backup and every issuer's signing key.
 #
 # Run it from the directory with docker-compose.yml, .env and backup.env, or set CREDFORGE_DIR.
 # It asks before replacing anything unless --yes is given.
@@ -28,13 +29,13 @@ while [[ $# -gt 0 ]]; do
     --yes) yes=true ;;
     --dump) dump_file="$2"; shift ;;
     list) "${backup_tool[@]}" list; exit 0 ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
     *) source="$1" ;;
   esac
   shift
 done
 if [[ -z "$source" && -z "$dump_file" ]]; then
-  sed -n '2,15p' "$0"
+  sed -n '2,16p' "$0"
   exit 2
 fi
 
@@ -64,7 +65,12 @@ echo "Replacing the database…"
 "${compose[@]}" exec -T db createdb --username=credforge --owner=credforge credforge
 "${compose[@]}" exec -T db pg_restore --username=credforge --dbname=credforge \
   --no-owner --no-privileges --exit-on-error --single-transaction <"$work/restore.dump"
-echo "Starting the stack (migrate re-creates the app's role and grants)…"
+echo "Migrating (re-creates the app's role and grants)…"
+"${compose[@]}" run --rm migrate
+# A backup older than an erasure brings that person's data back (design plan §12.1).
+echo "Erasing again the recipients erased since this backup was taken…"
+"${compose[@]}" run --rm --no-deps -T app node dist/cli.js reapply-erasures
+echo "Starting the stack…"
 "${compose[@]}" up -d
 for _ in $(seq 1 30); do
   if "${compose[@]}" exec -T app node dist/healthcheck.js >/dev/null 2>&1; then

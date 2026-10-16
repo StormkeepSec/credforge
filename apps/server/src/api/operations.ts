@@ -43,6 +43,8 @@ import {
   platformOrgSchema,
   platformOrgsQuery,
   problemSchema,
+  recipientErasurePreviewSchema,
+  recipientErasureResultSchema,
   reissueInput,
   revokeInput,
   updateAchievementInput,
@@ -547,6 +549,26 @@ export const OPERATIONS: readonly Operation[] = [
     auth: key('credential:issue'),
     body: reissueInput,
     responses: [created(credentialDetailsSchema)],
+  },
+  {
+    method: 'GET',
+    path: '/orgs/{orgId}/credentials/{credentialId}/erasure',
+    tag: CREDENTIALS,
+    summary: 'What erasing this badge’s recipient would cover',
+    description:
+      'Every badge the organization awarded to the same email address, the badges linked to those by a reissue, and the CSV rows holding the address.',
+    auth: member('recipient:erase'),
+    responses: [ok(recipientErasurePreviewSchema)],
+  },
+  {
+    method: 'POST',
+    path: '/orgs/{orgId}/credentials/{credentialId}/erasure',
+    tag: CREDENTIALS,
+    summary: 'Erase the recipient’s data (can’t be undone)',
+    description:
+      'Revokes the badges that are still valid (they stay revoked: copies keep verifying as revoked), removes the signed credentials, the name and email address from badges, emails and CSV rows, deletes the uploaded CSV files, and makes what the audit log says about the person unreadable. The badges’ pages answer 410 Gone. 409 `already_erased` when nothing is left to erase.',
+    auth: member('recipient:erase'),
+    responses: [ok(recipientErasureResultSchema)],
   },
 
   // ---- batches ----

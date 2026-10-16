@@ -219,6 +219,8 @@ const CASES: Case[] = [
     route: '/credentials/revoke',
     body: { credentialIds: [crypto.randomUUID()], reason: 'Intrusion' },
   },
+  { method: 'GET', route: '/credentials/:credentialId/erasure', resource: 'credentialId' },
+  { method: 'POST', route: '/credentials/:credentialId/erasure', resource: 'credentialId' },
   { method: 'GET', route: '/batches' },
   { method: 'GET', route: '/batches/template.csv' },
   {
@@ -406,6 +408,29 @@ describe('cross-tenant access', () => {
     );
     expect(exported.body).not.toContain(b.credentialId);
     expect(await snapshotB()).toEqual(before);
+  });
+
+  it("erases only its own org's records of an address another org also awarded to", async () => {
+    // B's credential is to B's owner; A awards the same address, then erases its own record.
+    const shared = b.owner.email;
+    const awarded = await a.owner.post(`/api/v1/orgs/${a.orgId}/credentials`, {
+      achievementId: a.achievementId,
+      recipient: { name: 'Shared Person', email: shared },
+    });
+    expect(awarded.statusCode, awarded.body).toBe(201);
+    const mine = (awarded.json() as { id: string }).id;
+    const before = await snapshotB();
+    const preview = await a.owner.get(`/api/v1/orgs/${a.orgId}/credentials/${mine}/erasure`);
+    expect(preview.body).not.toContain(b.credentialId);
+    const erased = await a.owner.post(`/api/v1/orgs/${a.orgId}/credentials/${mine}/erasure`);
+    expect(erased.statusCode, erased.body).toBe(200);
+    expect(erased.json()).toMatchObject({ erased: [mine], batchRows: 0 });
+    expect(await snapshotB()).toEqual(before);
+    const bEvents = await env.ownerDb
+      .select()
+      .from(auditEvent)
+      .where(eq(auditEvent.orgId, b.orgId));
+    expect(bEvents.some((event) => event.action === 'credential.erased')).toBe(false);
   });
 
   it("can't use an API key on another org", async () => {

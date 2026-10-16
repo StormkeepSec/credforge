@@ -1,4 +1,4 @@
-import type { BulkRevokeResult, CredentialDetails } from '@credforge/contracts';
+import type { AuditEventPage, BulkRevokeResult, CredentialDetails } from '@credforge/contracts';
 import { auditEvent, credential, emailMessage, eq, statusList } from '@credforge/db';
 import { Bitstring, verifyCredential } from '@credforge/ob3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -99,8 +99,8 @@ describe('revoking', () => {
     const list = await env.app.inject({
       method: 'GET',
       url: path(
-        (revoked.document.credentialStatus as { statusListCredential: string })
-          .statusListCredential,
+        (revoked.document as { credentialStatus: { statusListCredential: string } })
+          .credentialStatus.statusListCredential,
       ),
     });
     expect(list.headers.etag).toBe(`"${published?.id.slice(0, 8)}-${published?.version}"`);
@@ -123,15 +123,28 @@ describe('revoking', () => {
       'already_revoked',
     );
     expectProblem(await org.owner.post(`${org.api}/credentials/${id}/resend`), 409, 'conflict');
+    // Stored sealed: the org's reasons may name the recipient (design plan §12.1).
     const events = await env.ownerDb.select().from(auditEvent).where(eq(auditEvent.targetId, id));
-    const event = events.find((row) => row.action === 'credential.revoked');
-    expect(event).toMatchObject({
+    const stored = events.find((row) => row.action === 'credential.revoked');
+    expect(stored).toMatchObject({
       actorLabel: org.owner.email,
-      data: expect.objectContaining({
+      data: { kind: 'revoked', sealed: expect.any(String) },
+    });
+    expect(JSON.stringify(stored?.data)).not.toContain('ticket 42');
+    // …and read back whole.
+    const log = (await org.owner.get(`${org.api}/audit-events`)).json() as AuditEventPage;
+    const event = log.events.find(
+      (row) => row.action === 'credential.revoked' && row.target?.id === id,
+    );
+    expect(event).toMatchObject({
+      actor: { label: org.owner.email },
+      data: {
         kind: 'revoked',
         reason: 'Awarded by mistake (ticket 42)',
         publicReason: 'Issued in error',
-      }),
+        recipientName: 'Ada Lovelace',
+        recipientEmail: 'ada@example.org',
+      },
     });
   });
 

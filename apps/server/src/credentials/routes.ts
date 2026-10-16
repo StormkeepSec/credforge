@@ -6,6 +6,8 @@ import {
   bulkRevokeInput,
   type CredentialPage,
   credentialsQuery,
+  type RecipientErasurePreview,
+  type RecipientErasureResult,
   reissueInput,
   revokeInput,
 } from '@credforge/contracts';
@@ -16,8 +18,9 @@ import { ApiError, conflict, notFound, parse, uuidParam } from '../api/errors';
 import { recordAudit } from '../audit/audit';
 import { awardMessage } from '../email/messages';
 import { imageSet, loadFiles } from '../files/service';
-import { requestInfo, requirePermission, requireWritable } from '../orgs/access';
+import { requestInfo, requireMember, requirePermission, requireWritable } from '../orgs/access';
 import type { Services } from '../services';
+import { eraseRecipient, previewErasure } from './erasure';
 import { beforeCursor, credentialConditions, newestFirst } from './query';
 import { reissueCredential, revokeCredential, revokeCredentials } from './revocation';
 import {
@@ -180,7 +183,8 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
         .where(and(eq(credential.orgId, access.org.id), eq(credential.id, credentialId)))
         .for('update', { of: credential });
       if (!row) throw notFound('Credential');
-      if (row.credential.status !== 'issued') {
+      const { recipientEmail, recipientName, document } = row.credential;
+      if (row.credential.status !== 'issued' || !recipientEmail || !recipientName || !document) {
         throw conflict('This credential was revoked, so its link can’t be sent again.');
       }
       await checkSendLimit(tx, org, config.defaultOrgDailySendLimit);
@@ -198,11 +202,11 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       await queueAwardEmail(tx, services, {
         orgId: access.org.id,
         credentialId,
-        to: row.credential.recipientEmail,
-        recipientName: row.credential.recipientName,
+        to: recipientEmail,
+        recipientName,
         issuer: row.issuer,
         // The email describes the achievement as it was signed into this credential.
-        achievement: signedAchievement(row.credential.document) ?? row.achievement,
+        achievement: signedAchievement(document) ?? row.achievement,
         image: row.credential.imageFileId ? files.get(row.credential.imageFileId) : undefined,
         token: claim.token,
         expiresAt: claim.expiresAt,
@@ -213,7 +217,9 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
         actor: access.actor,
         action: 'credential.email_resent',
         target: { type: 'credential', id: credentialId },
-        data: { to: row.credential.recipientEmail },
+        ...(row.credential.auditKey && {
+          recipient: { key: row.credential.auditKey, data: { to: recipientEmail } },
+        }),
         request: requestInfo(request),
       });
     });
@@ -276,6 +282,39 @@ export const credentialRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       .code(201)
       .send(await loadCredentialDetails(db, config.publicBaseUrl, access.org.id, id));
   });
+};
+
+/**
+ * Erasing the recipient's data (design plan §12.1): what it would cover, then the erasure itself.
+ * Owners and admins only, never API keys; suspended orgs may erase too (it only removes data).
+ */
+export const erasureRoutes: FastifyPluginAsync<{ services: Services }> = async (
+  app,
+  { services },
+) => {
+  app.get(
+    '/credentials/:credentialId/erasure',
+    async (request): Promise<RecipientErasurePreview> => {
+      const access = requirePermission(request, 'recipient:erase');
+      requireMember(access);
+      return previewErasure(services.db, access.org.id, idOf(request));
+    },
+  );
+
+  app.post(
+    '/credentials/:credentialId/erasure',
+    async (request): Promise<RecipientErasureResult> => {
+      const access = requirePermission(request, 'recipient:erase');
+      requireMember(access);
+      return eraseRecipient(
+        services,
+        access.org.id,
+        { credentialId: idOf(request) },
+        access.actor,
+        requestInfo(request),
+      );
+    },
+  );
 };
 
 /** The achievement's name and description as signed into a credential. */

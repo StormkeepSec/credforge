@@ -8,6 +8,7 @@ import { PgBoss } from 'pg-boss';
 import { inject } from 'vitest';
 import { operationFor } from '../../../src/api/operations';
 import { buildApp } from '../../../src/app';
+import { sealEarlierAuditEvents } from '../../../src/audit/seal-earlier-events';
 import { createAuth } from '../../../src/auth/auth';
 import { loadConfig } from '../../../src/config';
 import { createKeyEncryption } from '../../../src/crypto/key-encryption';
@@ -60,6 +61,8 @@ export async function createTestEnvironment(
   const appUrl = withCredentials(serverUrl, { user: appRole, password: appPassword, database });
   const owner = createDatabase(ownerUrl, { max: 2 });
   await migrateDatabase(owner.db, MIGRATIONS_DIR);
+  // As `migrate` does: a one-time step after the SQL migrations (nothing to seal in a new database).
+  await sealEarlierAuditEvents(owner.pool);
   let boss: PgBoss | undefined;
   if (options.queue) {
     // The job queue, installed as the owner like `migrate` does, used through the app role.

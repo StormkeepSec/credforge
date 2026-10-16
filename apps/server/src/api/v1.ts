@@ -3,7 +3,7 @@ import { achievementRoutes } from '../achievements/routes';
 import { apiKeyRoutes } from '../api-keys/routes';
 import { auditRoutes } from '../audit/routes';
 import { batchRoutes } from '../batches/routes';
-import { credentialRoutes } from '../credentials/routes';
+import { credentialRoutes, erasureRoutes } from '../credentials/routes';
 import { exportRoutes } from '../exports/routes';
 import { issuerRoutes } from '../issuers/routes';
 import { meRoutes } from '../me/routes';
@@ -101,6 +101,7 @@ export const apiV1: FastifyPluginAsync<{
       await scoped.register(issuerRoutes, { services });
       await scoped.register(achievementRoutes, { services });
       await scoped.register(credentialRoutes, { services });
+      await scoped.register(erasureRoutes, { services });
       await scoped.register(batchRoutes, { services });
       await scoped.register(exportRoutes, { services });
       await scoped.register(auditRoutes, { services });

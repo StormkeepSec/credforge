@@ -167,8 +167,19 @@ export async function applySendGridEvents(db: Database, events: SendGridEvent[])
     };
 
     const changed = await db.transaction(async (tx) => {
-      const [row] = await tx.select().from(emailMessage).where(where).for('update');
-      if (!row) return false;
+      const [found] = await tx
+        .select({
+          message: emailMessage,
+          auditKey: credential.auditKey,
+          erasedAt: credential.erasedAt,
+        })
+        .from(emailMessage)
+        .leftJoin(credential, eq(emailMessage.credentialId, credential.id))
+        .where(where)
+        .for('update', { of: emailMessage });
+      // A message whose recipient's data was erased takes no more events (design plan §12.1).
+      if (!found || found.erasedAt) return false;
+      const row = found.message;
       const seen = row.events as (EmailEventData & { id?: string })[];
       if (record.id && seen.some((entry) => entry.id === record.id)) return false;
 
@@ -193,7 +204,11 @@ export async function applySendGridEvents(db: Database, events: SendGridEvent[])
           target: row.credentialId
             ? { type: 'credential', id: row.credentialId }
             : { type: 'email_message', id: row.id },
-          data: { emailId: row.id, kind: row.kind, ...(reason && { reason }) },
+          data: { emailId: row.id, kind: row.kind, ...(reason && !row.credentialId && { reason }) },
+          // The provider's reason often quotes the address: sealed with the badge's key.
+          ...(reason && found.auditKey && row.credentialId
+            ? { recipient: { key: found.auditKey, data: { reason } } }
+            : {}),
         });
       }
       return true;

@@ -390,7 +390,7 @@ describe('rate limits', () => {
         .select()
         .from(credential)
         .where(eq(credential.id, credentialId));
-      if (!row) throw new Error('no credential');
+      if (!row?.document) throw new Error('no credential');
       const { statusListCredential: listUrl } = row.document.credentialStatus as {
         statusListCredential: string;
       };

@@ -28,6 +28,8 @@ import type {
   OrgDetails,
   PlatformOrg,
   Problem,
+  RecipientErasurePreview,
+  RecipientErasureResult,
   VerifyResult,
 } from './api';
 import { ORG_STATUSES, SIGNUP_MODES } from './api';
@@ -264,7 +266,7 @@ const deliveryStatus = z.enum([
 const emailDeliverySchema = z.object({
   id: z.uuid(),
   kind: z.string(),
-  to: z.string(),
+  to: nullable(z.string()).describe('Null once the recipient’s data was erased'),
   status: deliveryStatus.exclude(['not_sent']),
   attempts: z.number().int(),
   lastError: nullable(z.string()),
@@ -284,7 +286,9 @@ const credentialSummaryShape = {
     revision: z.number().int(),
     image128: nullable(z.string()),
   }),
-  recipient: z.object({ name: z.string(), email: z.string() }),
+  recipient: nullable(z.object({ name: z.string(), email: z.string() })).describe(
+    'Null once the recipient’s data was erased',
+  ),
   status: z.enum(['draft', 'issued', 'revoked']),
   state: z.enum(['valid', 'not_yet_valid', 'expired', 'revoked']),
   validFrom: dateTime,
@@ -303,6 +307,9 @@ const credentialSummaryShape = {
   batchId: nullable(z.uuid()),
   replacedById: nullable(z.uuid()),
   replacesId: nullable(z.uuid()),
+  erasedAt: nullable(dateTime).describe(
+    'When the recipient’s data was erased: the badge is a revoked tombstone',
+  ),
   createdAt: dateTime,
 };
 
@@ -327,11 +334,40 @@ export const credentialDetailsSchema = z
       }),
     ),
     revokedBy: nullable(z.object({ label: nullable(z.string()) })),
-    document: z
-      .record(z.string(), z.unknown())
-      .describe('The signed Open Badges 3.0 credential (OpenBadgeCredential)'),
+    document: nullable(z.record(z.string(), z.unknown())).describe(
+      'The signed Open Badges 3.0 credential (OpenBadgeCredential); null once the recipient’s data was erased',
+    ),
+    erasedBy: nullable(z.object({ label: nullable(z.string()) })),
   })
   .meta({ id: 'Credential' });
+
+const credentialStateSchema = z.enum(['valid', 'not_yet_valid', 'expired', 'revoked']);
+
+export const recipientErasurePreviewSchema = z
+  .object({
+    recipient: nullable(z.object({ name: z.string(), email: z.string() })),
+    credentials: z.array(
+      z.object({
+        id: z.uuid(),
+        achievement: z.object({ id: z.uuid(), name: z.string() }),
+        state: credentialStateSchema,
+        validFrom: dateTime,
+        erased: z.boolean(),
+      }),
+    ),
+    toRevoke: z.number().int(),
+    batchRows: z.number().int(),
+  })
+  .meta({ id: 'RecipientErasurePreview' });
+
+export const recipientErasureResultSchema = z
+  .object({
+    erasureId: z.uuid(),
+    erased: z.array(z.uuid()),
+    revoked: z.array(z.uuid()),
+    batchRows: z.number().int(),
+  })
+  .meta({ id: 'RecipientErasureResult' });
 
 export const credentialPageSchema = z
   .object({
@@ -451,6 +487,7 @@ export const batchRowPageSchema = z
         status: z.enum(['draft', 'pending', 'issued', 'failed', 'skipped']),
         credential: nullable(z.object({ id: z.uuid(), url: z.string() })),
         error: nullable(z.object({ code: z.string(), message: z.string() })),
+        erasedAt: nullable(dateTime),
       }),
     ),
     next: nullable(z.number().int()),
@@ -558,6 +595,8 @@ const checks: {
   achievementRevision: Same<Out<typeof achievementRevisionSchema>, AchievementRevision>;
   credential: Same<Out<typeof credentialDetailsSchema>, CredentialDetails>;
   credentialPage: Same<Out<typeof credentialPageSchema>, CredentialPage>;
+  erasurePreview: Same<Out<typeof recipientErasurePreviewSchema>, RecipientErasurePreview>;
+  erasureResult: Same<Out<typeof recipientErasureResultSchema>, RecipientErasureResult>;
   awardPreview: Same<Out<typeof awardPreviewSchema>, AwardPreview>;
   bulkRevoke: Same<Out<typeof bulkRevokeResultSchema>, BulkRevokeResult>;
   batchPage: Same<Out<typeof batchPageSchema>, BatchPage>;
@@ -583,6 +622,8 @@ const checks: {
   achievementRevision: true,
   credential: true,
   credentialPage: true,
+  erasurePreview: true,
+  erasureResult: true,
   awardPreview: true,
   bulkRevoke: true,
   batchPage: true,

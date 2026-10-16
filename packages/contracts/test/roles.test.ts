@@ -20,6 +20,7 @@ describe('role permissions', () => {
     expect(roleHasPermission('issuer', 'issuer:update')).toBe(false);
     expect(roleHasPermission('issuer', 'member:invite')).toBe(false);
     expect(roleHasPermission('issuer', 'audit:read')).toBe(false);
+    expect(roleHasPermission('issuer', 'recipient:erase')).toBe(false);
   });
 
   it('keeps viewers read-only', () => {

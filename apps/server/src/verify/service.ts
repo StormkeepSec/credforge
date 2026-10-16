@@ -84,7 +84,10 @@ function decodeImage(value: string): Buffer {
 const LOCAL_CREDENTIAL =
   /^\/credentials\/([0-9a-f-]{36})(?:\/(badge\.png|badge\.svg|credential\.json))?\/?$/i;
 
-/** One of this instance's credentials by its URL (or a download's), unless its page is hidden. */
+/**
+ * One of this instance's credentials by its URL (or a download's), unless its page is hidden. A
+ * credential whose recipient's data was erased has no document left to check (design plan §12.1).
+ */
 async function localCredential(
   services: VerifyServices,
   url: URL,
@@ -97,6 +100,14 @@ async function localCredential(
     .from(credential)
     .where(eq(credential.id, match[1].toLowerCase()));
   if (!row || row.visibility === 'hidden') return null;
+  if (!row.document) {
+    throw new ApiError(
+      410,
+      'credential_erased',
+      'Badge removed',
+      'The issuer revoked this badge and removed its details. A copy of it (its JSON or a badge image) checks as revoked.',
+    );
+  }
   return {
     credential: row.document,
     source: match[2] === 'badge.png' ? 'png' : match[2] === 'badge.svg' ? 'svg' : 'url',

@@ -15,7 +15,7 @@ import {
 } from '@credforge/db';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { parse } from '../api/errors';
-import { recordAudit } from '../audit/audit';
+import { openAuditEvents, recordAudit } from '../audit/audit';
 import { CSV_BOM, csvLine } from '../batches/csv';
 import {
   beforeCursor,
@@ -42,8 +42,9 @@ interface ExportRecord {
   achievementId: string;
   achievementName: string;
   achievementRevision: number;
-  recipientName: string;
-  recipientEmail: string;
+  /** Null once the recipient's data was erased. */
+  recipientName: string | null;
+  recipientEmail: string | null;
   state: string;
   awardedAt: string;
   validFrom: string;
@@ -59,6 +60,7 @@ interface ExportRecord {
   replacesId: string | null;
   batchId: string | null;
   awardedBy: string | null;
+  erasedAt: string | null;
   customFields: Record<string, string>;
 }
 
@@ -68,7 +70,7 @@ async function* exportRecords(
   publicBaseUrl: string,
   orgId: string,
   filters: ParsedCredentialFilters,
-): AsyncGenerator<{ record: ExportRecord; document: Record<string, unknown> }[]> {
+): AsyncGenerator<{ record: ExportRecord; document: Record<string, unknown> | null }[]> {
   const now = new Date();
   const labels = new Map<string, string>();
   let cursor: { at: Date; id: string } | undefined;
@@ -128,6 +130,7 @@ async function* exportRecords(
           replacesId: row.replacesId,
           batchId: row.batchId,
           awardedBy: row.issuedById ? (labels.get(row.issuedById) ?? null) : null,
+          erasedAt: row.erasedAt?.toISOString() ?? null,
           customFields: row.customFields,
         },
       };
@@ -161,6 +164,7 @@ const CSV_COLUMNS: [string, (record: ExportRecord) => unknown][] = [
   ['Replaces', (r) => r.replacesId],
   ['Batch', (r) => r.batchId],
   ['Awarded by', (r) => r.awardedBy],
+  ['Recipient erased at', (r) => r.erasedAt],
 ];
 
 /** Custom-field names used by the exported credentials, for the CSV's extra columns. */
@@ -174,6 +178,15 @@ async function customKeys(db: Queryable, orgId: string, filters: ParsedCredentia
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * An export's filters as the audit log records them. The search text may be someone's name or
+ * address, which the log can't forget, so only that a search was used is kept (design plan §12.1).
+ */
+function loggedFilters(filters: ParsedCredentialFilters): Record<string, unknown> {
+  const { q, ...rest } = filters;
+  return { ...rest, ...(q && { search: true }) };
+}
 
 function download(reply: FastifyReply, type: string, name: string, body: AsyncGenerator<string>) {
   return reply
@@ -207,7 +220,7 @@ export const exportRoutes: FastifyPluginAsync<{ services: Services }> = async (
       orgId: access.org.id,
       actor: access.actor,
       action: 'credentials.exported',
-      data: { format: 'csv', filters },
+      data: { format: 'csv', filters: loggedFilters(filters) },
       request: requestInfo(request),
     });
     async function* body() {
@@ -234,7 +247,7 @@ export const exportRoutes: FastifyPluginAsync<{ services: Services }> = async (
       orgId: access.org.id,
       actor: access.actor,
       action: 'credentials.exported',
-      data: { format: 'jsonl', filters },
+      data: { format: 'jsonl', filters: loggedFilters(filters) },
       request: requestInfo(request),
     });
     async function* body() {
@@ -262,7 +275,7 @@ export const exportRoutes: FastifyPluginAsync<{ services: Services }> = async (
         .orderBy(asc(auditEvent.id))
         .limit(PAGE);
       if (rows.length === 0) return;
-      yield rows;
+      yield await openAuditEvents(db, orgId, rows);
       after = rows.at(-1)?.id ?? after;
       if (rows.length < PAGE) return;
     }

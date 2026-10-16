@@ -62,7 +62,11 @@ records the drill that was run (design plan §13.4).
 `deploy/restore.sh` replaces the stack's database with a backup. It downloads and decrypts the
 backup (inside the `backup` service), checks that `pg_restore` can read it, asks before going on,
 stops `app` and `worker`, drops and recreates the database, restores the dump in one transaction,
-and starts the stack: `migrate` then re-creates the app's restricted role and its grants.
+runs `migrate` (which re-creates the app's restricted role and its grants), erases again every
+recipient whose data was erased after the backup was taken (`node dist/cli.js reapply-erasures`,
+from the erasure records under `erasures/` in the files bucket; design plan §12.1), and starts the
+stack. A restore never brings an erased person's data back, as long as the files bucket is the one
+the erasures were recorded in.
 
 ```bash
 cd /opt/credforge
@@ -117,6 +121,11 @@ unchanged.
 7. **Multipart:** a 40 MB upload went up in three parts and came back with the same SHA-256.
 
 The stacks, volumes, the stand-in and the generated secrets were deleted afterwards.
+
+**Not yet drilled:** the erasure step was added after this drill (`reapply-erasures` is covered by
+the server's integration tests, which put an erased badge back as an older backup would and check
+that it is erased again). Include it next time: erase a recipient after the backup, restore, and
+check the badge's page answers 410.
 
 **Repeat the drill** after the first deploy (restore last night's backup into a throwaway stack on
 your PC or a scratch droplet), and then every few months and after any change to the database or

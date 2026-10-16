@@ -407,12 +407,12 @@ function Awarded({
       <CardHeader>
         <CardTitle ref={heading} tabIndex={-1} className="flex items-center gap-2 outline-none">
           <CheckCircle2 className="size-5 text-ok" aria-hidden="true" />
-          Awarded to {credential.recipient.name}
+          Awarded to {credential.recipient?.name}
         </CardTitle>
         <CardDescription>
           {credential.achievement.name} is signed and stored.{' '}
           {emailed
-            ? `An email with their link is on its way to ${credential.recipient.email}.`
+            ? `An email with their link is on its way to ${credential.recipient?.email}.`
             : 'No email was sent.'}
         </CardDescription>
       </CardHeader>

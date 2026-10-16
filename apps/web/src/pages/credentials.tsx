@@ -4,6 +4,8 @@ import {
   type CredentialFilters,
   type CredentialState,
   type CredentialSummary,
+  type RecipientErasurePreview,
+  type RecipientErasureResult,
   type ReissueInput,
   reissueInput,
   revokeInput,
@@ -18,6 +20,7 @@ import {
   ExternalLink,
   Inbox,
   Search,
+  UserX,
   XCircle,
 } from 'lucide-react';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
@@ -38,6 +41,7 @@ import { Alert, Badge, Spinner } from '../components/ui/feedback';
 import { Field, Input, Select, Textarea } from '../components/ui/input';
 import {
   ApiError,
+  api,
   errorMessage,
   fetchCredentialPage,
   filterQuery,
@@ -55,6 +59,7 @@ const STATE: Record<CredentialState, { label: string; variant: 'success' | 'warn
   };
 
 function StateBadge({ credential }: { credential: CredentialSummary }) {
+  if (credential.erasedAt) return <Badge variant="danger">Revoked, data erased</Badge>;
   if (credential.revocation?.kind === 'superseded') return <Badge>Replaced</Badge>;
   const { label, variant } = STATE[credential.state];
   return <Badge variant={variant}>{label}</Badge>;
@@ -202,7 +207,7 @@ export function CredentialsPage({
                 <div className="flex items-center">
                   <input
                     type="checkbox"
-                    aria-label={`Select ${credential.recipient.name}, ${credential.achievement.name}`}
+                    aria-label={`Select ${credential.recipient?.name ?? 'erased recipient'}, ${credential.achievement.name}`}
                     disabled={credential.status !== 'issued'}
                     checked={selected.has(credential.id)}
                     onChange={(event) => toggle(credential.id, event.target.checked)}
@@ -227,10 +232,16 @@ export function CredentialsPage({
                   )}
                 </div>
                 <div className="min-w-0">
-                  <p className="font-semibold break-words">{credential.recipient.name}</p>
-                  <p className="text-sm break-all text-muted-foreground">
-                    {credential.recipient.email}
-                  </p>
+                  {credential.recipient ? (
+                    <>
+                      <p className="font-semibold break-words">{credential.recipient.name}</p>
+                      <p className="text-sm break-all text-muted-foreground">
+                        {credential.recipient.email}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="font-semibold text-muted-foreground">Recipient’s data erased</p>
+                  )}
                   <p className="mt-1 text-sm">
                     {credential.achievement.name}
                     <span className="text-muted-foreground">
@@ -555,10 +566,10 @@ function Timeline({ credential }: { credential: CredentialDetails }) {
             }
           >
             {email.sentAt
-              ? `${formatDateTime(email.sentAt)} to ${email.to}`
+              ? `${formatDateTime(email.sentAt)}${email.to ? ` to ${email.to}` : ''}`
               : email.status === 'failed'
                 ? email.lastError
-                : `To ${email.to}`}
+                : email.to && `To ${email.to}`}
           </TimelineStep>
           <TimelineStep
             state={problem ? 'failed' : email.deliveredAt ? 'done' : 'waiting'}
@@ -599,6 +610,12 @@ function Timeline({ credential }: { credential: CredentialDetails }) {
           {credential.revokedBy?.label && ` by ${credential.revokedBy.label}`}
         </TimelineStep>
       )}
+      {credential.erasedAt && (
+        <TimelineStep state="failed" title="Recipient’s data erased">
+          {formatDateTime(credential.erasedAt)}
+          {credential.erasedBy?.label && ` by ${credential.erasedBy.label}`}
+        </TimelineStep>
+      )}
     </ol>
   );
 }
@@ -613,6 +630,12 @@ export function CredentialDetailPage({
   const queryClient = useQueryClient();
   const { data: org } = useQuery(queries.org(orgId));
   const { data: credential, error, isPending } = useQuery(queries.credential(orgId, credentialId));
+  // After an erasure the page swaps the erase card for the erased notice: focus goes there.
+  const erasedHeading = useRef<HTMLHeadingElement>(null);
+  const [justErased, setJustErased] = useState(false);
+  useEffect(() => {
+    if (justErased && credential?.erasedAt) erasedHeading.current?.focus();
+  }, [justErased, credential?.erasedAt]);
   const resend = useMutation({
     mutationFn: () => post<CredentialDetails>(`/orgs/${orgId}/credentials/${credentialId}/resend`),
     onSuccess: async (updated) => {
@@ -625,13 +648,15 @@ export function CredentialDetailPage({
   const writable = isWritable(org) && credential.status === 'issued';
   const canSend = writable && org.permissions.includes('credential:issue');
   const canRevoke = writable && org.permissions.includes('credential:revoke');
+  // Erasing only removes data, so suspended organizations may do it too.
+  const canErase = !credential.erasedAt && org.permissions.includes('recipient:erase');
   const revocation = credential.revocation;
 
   return (
     <>
       <PageHeader
         icon={Inbox}
-        title={credential.recipient.name}
+        title={credential.recipient?.name ?? 'Recipient’s data erased'}
         description={credential.achievement.name}
       />
       <OrgStatusBanner org={org} />
@@ -645,6 +670,26 @@ export function CredentialDetailPage({
         </Link>
       </div>
       <div className="grid gap-6">
+        {credential.erasedAt && (
+          <Card className="border-destructive/50">
+            <CardHeader>
+              <CardTitle
+                ref={erasedHeading}
+                tabIndex={-1}
+                className="flex items-center gap-2 outline-none"
+              >
+                <UserX className="size-5 text-destructive" aria-hidden="true" />
+                Recipient’s data erased on {formatDate(credential.erasedAt)}
+              </CardTitle>
+              <CardDescription>
+                {credential.erasedBy?.label && <>By {credential.erasedBy.label}. </>}
+                Their name, email address, signed badge, emails and CSV rows are gone, and the audit
+                log can no longer show who they were. The badge stays revoked: its page says it was
+                removed, and any copy of it checks as revoked.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        )}
         {credential.replacesId && (
           <Alert variant="info" live={false} title="A corrected copy">
             This badge replaces an{' '}
@@ -680,6 +725,7 @@ export function CredentialDetailPage({
               </>
             )}
             {revocation.reason && <>Reason: {revocation.reason}. </>}
+            {credential.erasedAt && !revocation.reason && <>Its reasons were erased with it.</>}
             {revocation.publicReason && <>Shown publicly: “{revocation.publicReason}”.</>}
           </Alert>
         )}
@@ -708,7 +754,7 @@ export function CredentialDetailPage({
               <ConfirmButton
                 variant="outline"
                 confirmLabel="Send"
-                question={`Email a new link to ${credential.recipient.email}? The old link stops working.`}
+                question={`Email a new link to ${credential.recipient?.email}? The old link stops working.`}
                 pending={resend.isPending}
                 onConfirm={() => resend.mutate()}
               >
@@ -727,7 +773,9 @@ export function CredentialDetailPage({
               <div>
                 <dt className="font-semibold">Recipient</dt>
                 <dd className="break-all text-muted-foreground">
-                  {credential.recipient.name} · {credential.recipient.email}
+                  {credential.recipient
+                    ? `${credential.recipient.name} · ${credential.recipient.email}`
+                    : 'Erased'}
                 </dd>
               </div>
               <div>
@@ -749,7 +797,11 @@ export function CredentialDetailPage({
               <div>
                 <dt className="font-semibold">Page</dt>
                 <dd className="text-muted-foreground">
-                  {credential.visibility === 'hidden' ? 'Hidden by the recipient' : 'Public'}
+                  {credential.erasedAt
+                    ? 'Removed: it says the badge was revoked and its details erased'
+                    : credential.visibility === 'hidden'
+                      ? 'Hidden by the recipient'
+                      : 'Public'}
                 </dd>
               </div>
               {credential.claimLinkExpiresAt && (
@@ -813,16 +865,18 @@ export function CredentialDetailPage({
                   Open the badge page
                 </a>
               </Button>
-              <Button asChild variant="outline">
-                <a
-                  href={`/verify?url=${encodeURIComponent(credential.url)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <ExternalLink aria-hidden="true" />
-                  Check it in the verification tool
-                </a>
-              </Button>
+              {!credential.erasedAt && (
+                <Button asChild variant="outline">
+                  <a
+                    href={`/verify?url=${encodeURIComponent(credential.url)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <ExternalLink aria-hidden="true" />
+                    Check it in the verification tool
+                  </a>
+                </Button>
+              )}
             </CardFooter>
           )}
         </Card>
@@ -831,8 +885,156 @@ export function CredentialDetailPage({
           <ReissueCard orgId={orgId} credential={credential} />
         )}
         {canRevoke && <RevokeCard orgId={orgId} credential={credential} />}
+        {canErase && (
+          <EraseCard orgId={orgId} credential={credential} onErased={() => setJustErased(true)} />
+        )}
       </div>
     </>
+  );
+}
+
+const plural = (count: number, one: string, many = `${one}s`) =>
+  `${count.toLocaleString('en-US')} ${count === 1 ? one : many}`;
+
+/**
+ * Erasing the recipient's data (design plan §12.1): first what it covers (every badge to the same
+ * address, linked reissues, CSV rows), then a confirmation in place. It can't be undone.
+ */
+function EraseCard({
+  orgId,
+  credential,
+  onErased,
+}: {
+  orgId: string;
+  credential: CredentialDetails;
+  onErased: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const closing = useRef(false);
+  useEffect(() => {
+    if (open) heading.current?.focus();
+    else if (closing.current) {
+      closing.current = false;
+      trigger.current?.focus();
+    }
+  }, [open]);
+  const preview = useQuery({
+    queryKey: ['org', orgId, 'credential', credential.id, 'erasure'],
+    queryFn: () =>
+      api<RecipientErasurePreview>(`/orgs/${orgId}/credentials/${credential.id}/erasure`),
+    enabled: open,
+  });
+  const erase = useMutation({
+    mutationFn: () =>
+      post<RecipientErasureResult>(`/orgs/${orgId}/credentials/${credential.id}/erasure`),
+    onSuccess: async (result) => {
+      onErased();
+      for (const id of result.erased) {
+        await queryClient.invalidateQueries({ queryKey: ['org', orgId, 'credential', id] });
+      }
+      await queryClient.invalidateQueries({ queryKey: ['org', orgId, 'credentials'] });
+      await queryClient.invalidateQueries({ queryKey: ['org', orgId, 'batch'] });
+      await queryClient.invalidateQueries({ queryKey: ['org', orgId, 'audit'] });
+    },
+  });
+  const name = credential.recipient?.name ?? 'this person';
+  const data = preview.data;
+  const badges = data?.credentials.filter((item) => !item.erased) ?? [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle ref={heading} tabIndex={-1} className="outline-none">
+          Erase this person’s data
+        </CardTitle>
+        <CardDescription>
+          For a request to delete their data. Their badges from your organization are revoked for
+          good, and their name, email address and signed badges are removed from your records,
+          including what the audit log says about them. This can’t be undone.
+        </CardDescription>
+      </CardHeader>
+      {!open ? (
+        <CardFooter>
+          <Button ref={trigger} variant="outline" onClick={() => setOpen(true)}>
+            Review what would be erased
+          </Button>
+        </CardFooter>
+      ) : (
+        <>
+          <CardContent className="grid gap-4 text-sm">
+            {preview.isPending ? (
+              <Spinner />
+            ) : preview.isError || !data ? (
+              <Alert variant="error">{errorMessage(preview.error)}</Alert>
+            ) : (
+              <>
+                <section aria-labelledby="erase-badges">
+                  <h3 id="erase-badges" className="font-semibold">
+                    {plural(badges.length, 'badge')}
+                    {data.recipient && (
+                      <span className="font-normal text-muted-foreground">
+                        {' '}
+                        awarded to {data.recipient.email} or linked by a reissue
+                      </span>
+                    )}
+                  </h3>
+                  <ul className="mt-2 grid gap-1.5">
+                    {badges.map((item) => (
+                      <li key={item.id} className="flex flex-wrap items-center gap-2">
+                        <span className="break-words">{item.achievement.name}</span>
+                        <span className="text-muted-foreground">
+                          awarded {formatDay(item.validFrom)}
+                        </span>
+                        <Badge variant={STATE[item.state].variant}>{STATE[item.state].label}</Badge>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+                <ul className="grid gap-1.5 text-muted-foreground">
+                  <li>
+                    {data.toRevoke > 0
+                      ? `${plural(data.toRevoke, 'badge')} still valid will be revoked.`
+                      : 'All of them are revoked already.'}
+                  </li>
+                  {data.batchRows > 0 && (
+                    <li>
+                      {plural(data.batchRows, 'row')} in CSV uploads will be emptied, and those
+                      uploaded files deleted.
+                    </li>
+                  )}
+                  <li>Copies they or others downloaded aren’t affected, but check as revoked.</li>
+                </ul>
+                {erase.isError && <Alert variant="error">{errorMessage(erase.error)}</Alert>}
+              </>
+            )}
+          </CardContent>
+          <CardFooter>
+            <ConfirmButton
+              variant="destructive"
+              confirmLabel="Erase permanently"
+              question={`Erase ${name}’s data from ${plural(badges.length, 'badge')}? This can’t be undone.`}
+              pending={erase.isPending}
+              disabled={!data || badges.length + data.batchRows === 0}
+              onConfirm={() => erase.mutate()}
+            >
+              Erase {name}’s data
+            </ConfirmButton>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                closing.current = true;
+                setOpen(false);
+              }}
+            >
+              Cancel
+            </Button>
+          </CardFooter>
+        </>
+      )}
+    </Card>
   );
 }
 
@@ -881,7 +1083,7 @@ function RevokeCard({ orgId, credential }: { orgId: string; credential: Credenti
         <ConfirmButton
           variant="destructive"
           confirmLabel="Revoke"
-          question={`Revoke ${credential.recipient.name}’s badge?`}
+          question={`Revoke ${credential.recipient?.name ?? 'this'}’s badge?`}
           pending={revoke.isPending}
           onConfirm={() => {
             const parsed = revokeInput.safeParse({ reason, publicReason });
@@ -913,8 +1115,8 @@ function ReissueCard({ orgId, credential }: { orgId: string; credential: Credent
   const trigger = useRef<HTMLButtonElement>(null);
   const closing = useRef(false);
   const start = {
-    name: credential.recipient.name,
-    email: credential.recipient.email,
+    name: credential.recipient?.name ?? '',
+    email: credential.recipient?.email ?? '',
     issuedOn: dayOf(credential.validFrom),
     expiresOn: dayOf(credential.validUntil),
   };

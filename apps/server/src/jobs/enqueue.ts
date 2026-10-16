@@ -42,6 +42,22 @@ export function createJobQueue(boss: Pick<PgBoss, 'send'>): JobQueue {
   };
 }
 
+/**
+ * Deletes the email jobs of these `email_message` rows that aren't being sent right now: their
+ * payloads hold the recipient's address and name (erasure, design plan §12.1). Jobs already sent
+ * are deleted a day later anyway. Does nothing where the job queue isn't installed (some tests).
+ */
+export async function deleteEmailJobs(tx: Queryable, emailMessageIds: string[]): Promise<void> {
+  if (emailMessageIds.length === 0) return;
+  const queue = transactionDatabase(tx);
+  const { rows } = await queue.executeSql(`select to_regclass('pgboss.job') is not null as ok`);
+  if (!(rows[0] as { ok?: boolean } | undefined)?.ok) return;
+  await queue.executeSql(
+    `delete from pgboss.job where name = $1 and state <> 'active' and data->>'trackingId' = any($2::text[])`,
+    [QUEUES.email, emailMessageIds],
+  );
+}
+
 /** Records what was asked for. Used by tests, which run the jobs themselves. */
 export function createMemoryJobQueue(): JobQueue & {
   batches: string[];

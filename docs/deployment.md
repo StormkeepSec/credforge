@@ -420,6 +420,12 @@ sudo certbot certificates
   `docker compose exec app node dist/cli.js revoke-org-credentials --org <id> --reason "…"`
   (without `--yes` it only counts them). Images stay cached in nginx; empty the cache with
   `sudo rm -rf /var/cache/nginx/credforge-images/*` if one has to disappear.
+- A request to delete a recipient's data (to the privacy address) goes to the organization that
+  awarded the badge: its owners and admins use **Erase this person's data** on one of the badges.
+  If the organization doesn't answer, or is suspended,
+  `docker compose exec app node dist/cli.js erase-recipient --org <id> --email <address>` shows
+  what it would erase, and `--yes` erases it (design plan §12.1). Each erasure leaves a small
+  record under `erasures/` in the `credforge-prod` bucket: keep it, so restores re-apply erasures.
 
 ## Troubleshooting
 

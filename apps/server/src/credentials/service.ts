@@ -31,7 +31,7 @@ import { generateSalt, issueCredential, type SignedOpenBadgeCredential } from '@
 import type { z } from 'zod';
 import { obAchievementInput } from '../achievements/service';
 import { ApiError, notFound } from '../api/errors';
-import { recordAudit } from '../audit/audit';
+import { newAuditKey, recordAudit } from '../audit/audit';
 import { type Config, parseMailbox } from '../config';
 import type { KeyEncryption } from '../crypto/key-encryption';
 import { awardMessage } from '../email/messages';
@@ -351,6 +351,7 @@ export async function awardInTransaction(
   );
 
   const claim = sendEmail ? newClaimToken(now) : null;
+  const auditKey = newAuditKey();
   await tx.insert(credential).values({
     id,
     orgId: org.id,
@@ -378,6 +379,7 @@ export async function awardInTransaction(
     customFields: options.customFields ?? {},
     issuedByType: actor.type,
     issuedById: actor.id,
+    auditKey,
     createdAt: now,
     updatedAt: now,
   });
@@ -391,11 +393,14 @@ export async function awardInTransaction(
     data: {
       achievementId: row.id,
       achievementRevision: row.revision,
-      recipientName: input.recipient.name,
-      recipientEmail: email,
       emailed: sendEmail,
       ...(options.batch && { batchId: options.batch.id, batchRow: options.batch.rowNumber }),
       ...(options.replaces && { replaces: options.replaces.id }),
+    },
+    // Sealed with the credential's audit key, which erasing the recipient deletes (§12.1).
+    recipient: {
+      key: auditKey,
+      data: { recipientName: input.recipient.name, recipientEmail: email },
     },
     request,
   });
@@ -564,7 +569,10 @@ export function serializeCredentialSummary(
         ? imageSet(publicBaseUrl, achievementInfo.image).url128
         : null,
     },
-    recipient: { name: row.recipientName, email: row.recipientEmail },
+    recipient:
+      row.recipientName !== null && row.recipientEmail !== null
+        ? { name: row.recipientName, email: row.recipientEmail }
+        : null,
     status: row.status,
     state: credentialState(row),
     validFrom: row.validFrom.toISOString(),
@@ -576,6 +584,7 @@ export function serializeCredentialSummary(
     batchId: row.batchId,
     replacedById: row.replacedById,
     replacesId: row.replacesId,
+    erasedAt: row.erasedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -623,22 +632,24 @@ export async function loadCredentialDetails(
             .where(eq(apiKey.id, issuedById))
         ).map((key) => ({ label: `${key.name} (${key.prefix})` }))[0]
       : (await db.select({ label: user.email }).from(user).where(eq(user.id, issuedById)))[0];
+  const lastEvent = (action: string) =>
+    db
+      .select({ label: auditEvent.actorLabel })
+      .from(auditEvent)
+      .where(
+        and(
+          eq(auditEvent.orgId, orgId),
+          eq(auditEvent.targetType, 'credential'),
+          eq(auditEvent.targetId, credentialId),
+          eq(auditEvent.action, action),
+        ),
+      )
+      .orderBy(desc(auditEvent.id))
+      .limit(1);
+  // An erasure that revoked the badge records only `credential.erased`.
   const [revokedEvent] =
-    row.credential.status === 'revoked'
-      ? await db
-          .select({ label: auditEvent.actorLabel })
-          .from(auditEvent)
-          .where(
-            and(
-              eq(auditEvent.orgId, orgId),
-              eq(auditEvent.targetType, 'credential'),
-              eq(auditEvent.targetId, credentialId),
-              eq(auditEvent.action, 'credential.revoked'),
-            ),
-          )
-          .orderBy(desc(auditEvent.id))
-          .limit(1)
-      : [];
+    row.credential.status === 'revoked' ? await lastEvent('credential.revoked') : [];
+  const [erasedEvent] = row.credential.erasedAt ? await lastEvent('credential.erased') : [];
   return {
     ...serializeCredentialSummary(
       publicBaseUrl,
@@ -662,7 +673,12 @@ export async function loadCredentialDetails(
       name: item.name ?? null,
       narrative: item.narrative ?? null,
     })),
-    revokedBy: revokedEvent ? { label: revokedEvent.label } : null,
+    revokedBy: revokedEvent
+      ? { label: revokedEvent.label }
+      : erasedEvent
+        ? { label: erasedEvent.label }
+        : null,
     document: row.credential.document,
+    erasedBy: erasedEvent ? { label: erasedEvent.label } : null,
   };
 }

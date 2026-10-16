@@ -685,6 +685,11 @@ export const issuanceBatchRow = pgTable(
     errorCode: text('error_code'),
     errorMessage: text('error_message'),
     processedAt: timestamptz('processed_at'),
+    /**
+     * When the person on this row had their data erased (design plan §12.1): `cells` and `values`
+     * are emptied and the row is never checked or awarded again.
+     */
+    erasedAt: timestamptz('erased_at'),
   },
   (table) => [
     primaryKey({ columns: [table.batchId, table.rowNumber] }),
@@ -715,6 +720,10 @@ export interface EvidenceData {
  * An issued OB 3.0 credential. `document` is the signed credential exactly as issued; it never
  * changes (a correction is a reissue). "Expired" is computed from `valid_until`, never stored.
  * The recipient's claim link carries a 256-bit token of which only the SHA-256 is stored.
+ *
+ * Erasing the recipient's data (design plan §12.1) leaves a tombstone: `erased_at` is set and the
+ * document, the recipient's name, email and salt, the audit key and everything else about the
+ * person are cleared. The status-list entry stays, so copies of the credential verify as revoked.
  */
 export const credential = pgTable(
   'credential',
@@ -735,15 +744,16 @@ export const credential = pgTable(
     /** The batch that awarded it, and its row there (at most one credential per row). */
     batchId: uuid('batch_id').references((): AnyPgColumn => issuanceBatch.id),
     batchRowNumber: integer('batch_row_number'),
-    /** Normalized (trimmed, lowercase). Never shown on public pages. */
-    recipientEmail: text('recipient_email').notNull(),
-    recipientName: text('recipient_name').notNull(),
+    /** Normalized (trimmed, lowercase). Never shown on public pages. Null once erased. */
+    recipientEmail: text('recipient_email'),
+    recipientName: text('recipient_name'),
     /** Salt of the hashed email identifier in the credential. */
-    emailSalt: text('email_salt').notNull(),
+    emailSalt: text('email_salt'),
     status: text('status', { enum: CREDENTIAL_STATUS_VALUES }).notNull().default('issued'),
     validFrom: timestamptz('valid_from').notNull(),
     validUntil: timestamptz('valid_until'),
-    document: jsonb('document').$type<Record<string, unknown>>().notNull(),
+    /** The signed credential; null once erased. */
+    document: jsonb('document').$type<Record<string, unknown>>(),
     signingKeyId: uuid('signing_key_id')
       .notNull()
       .references(() => signingKey.id),
@@ -770,6 +780,13 @@ export const credential = pgTable(
     customFields: jsonb('custom_fields').$type<Record<string, string>>().notNull().default({}),
     issuedByType: text('issued_by_type', { enum: ISSUED_BY_TYPES }).notNull(),
     issuedById: text('issued_by_id'),
+    /**
+     * Seals what audit events say about the recipient (AES-256-GCM, design plan §12.1). Erasing
+     * the recipient deletes it, which leaves those parts of the append-only log unreadable.
+     */
+    auditKey: bytea('audit_key'),
+    /** When the recipient's data was erased; the row is then a tombstone. */
+    erasedAt: timestamptz('erased_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -788,6 +805,11 @@ export const credential = pgTable(
     check(
       'credential_revocation_kind_check',
       sql`"revocation_kind" is null or ${oneOf(table.revocationKind, REVOCATION_KIND_VALUES)}`,
+    ),
+    // Only an erased credential may lack its document, recipient or audit key.
+    check(
+      'credential_erased_check',
+      sql`"erased_at" is not null or ("document" is not null and "recipient_email" is not null and "recipient_name" is not null and "email_salt" is not null and "audit_key" is not null)`,
     ),
   ],
 );
@@ -825,7 +847,8 @@ export const emailMessage = pgTable(
     credentialId: uuid('credential_id').references(() => credential.id),
     /** Template name, e.g. `award`. */
     kind: text('kind').notNull(),
-    toEmail: text('to_email').notNull(),
+    /** Null once the recipient's data was erased. */
+    toEmail: text('to_email'),
     status: text('status', { enum: EMAIL_STATUS_VALUES }).notNull().default('queued'),
     /** `sendgrid`, `smtp` or `log`, once sent. */
     transport: text('transport'),

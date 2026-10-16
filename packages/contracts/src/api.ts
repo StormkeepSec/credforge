@@ -59,6 +59,8 @@ export type ProblemCode =
   | 'batch_not_draft'
   | 'nothing_to_award'
   | 'already_revoked'
+  | 'already_erased'
+  | 'credential_erased'
   | 'not_a_credential'
   | 'rate_limited'
   | 'api_key_not_allowed'
@@ -839,7 +841,8 @@ export type DeliveryStatus =
 export interface EmailDelivery {
   id: string;
   kind: string;
-  to: string;
+  /** Null once the recipient's data was erased. */
+  to: string | null;
   status: Exclude<DeliveryStatus, 'not_sent'>;
   attempts: number;
   lastError: string | null;
@@ -865,7 +868,8 @@ export interface CredentialSummary {
   /** The credential's permanent public URL. */
   url: string;
   achievement: { id: string; name: string; revision: number; image128: string | null };
-  recipient: { name: string; email: string };
+  /** Null once the recipient's data was erased. */
+  recipient: { name: string; email: string } | null;
   status: 'draft' | 'issued' | 'revoked';
   /** From the status and the dates: valid, not valid yet, expired or revoked. */
   state: CredentialState;
@@ -881,6 +885,8 @@ export interface CredentialSummary {
   /** The corrected copy that replaced it, and the credential it corrects. */
   replacedById: string | null;
   replacesId: string | null;
+  /** When the recipient's data was erased (design plan §12.1): the badge is a revoked tombstone. */
+  erasedAt: string | null;
   createdAt: string;
 }
 
@@ -895,8 +901,41 @@ export interface CredentialDetails extends CredentialSummary {
   evidence: { url: string | null; name: string | null; narrative: string | null }[];
   /** Who revoked it, from the audit log. */
   revokedBy: { label: string | null } | null;
-  /** The signed OB 3.0 credential. */
-  document: Record<string, unknown>;
+  /** The signed OB 3.0 credential; null once the recipient's data was erased. */
+  document: Record<string, unknown> | null;
+  /** Who erased the recipient's data, from the audit log. */
+  erasedBy: { label: string | null } | null;
+}
+
+/**
+ * What erasing a badge's recipient covers (design plan §12.1): every badge the org awarded to the
+ * same address, the badges linked to those by a reissue, and the CSV rows holding the address.
+ */
+export interface RecipientErasurePreview {
+  /** As the org knows them; null when this badge's recipient was already erased. */
+  recipient: { name: string; email: string } | null;
+  credentials: {
+    id: string;
+    achievement: { id: string; name: string };
+    state: CredentialState;
+    validFrom: string;
+    /** Already erased (a badge erased earlier, linked by a reissue). */
+    erased: boolean;
+  }[];
+  /** Badges the erasure will revoke; the others are revoked already. */
+  toRevoke: number;
+  /** CSV batch rows holding the address. */
+  batchRows: number;
+}
+
+export interface RecipientErasureResult {
+  /** Also in the audit log's `credential.erased` events. */
+  erasureId: string;
+  /** The badges erased now. */
+  erased: string[];
+  /** Those of them that were still valid and are now revoked. */
+  revoked: string[];
+  batchRows: number;
 }
 
 export interface CredentialPage {
@@ -983,6 +1022,8 @@ export interface BatchRow {
   status: BatchRowStatus;
   credential: { id: string; url: string } | null;
   error: { code: string; message: string } | null;
+  /** When the person on this row had their data erased; `values` is then null. */
+  erasedAt: string | null;
 }
 
 export interface BatchPage {

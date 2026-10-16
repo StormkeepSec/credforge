@@ -25,6 +25,8 @@ export const PERMISSIONS = [
   'credential:revoke',
   /** Download every credential with its recipient's address (CSV, JSONL). */
   'credential:export',
+  /** Erase a recipient's data from the org's records, which can't be undone (design plan §12.1). */
+  'recipient:erase',
   'audit:read',
   /** Create and revoke the org's API keys. */
   'api_key:manage',

@@ -8,9 +8,9 @@
 > public badge pages) and M4 (awarding many from a CSV file, revoking and reissuing, the
 > verification tool, search and exports) are done. M5's hardening is done (API keys and API docs,
 > rate limits, abuse reports, domain verification, security headers, the landing page, draft
-> privacy policy and terms, encrypted nightly backups with a tested restore); deploying to
-> credforge.app is next. See the [design plan](docs/design-plan.md) for the architecture and the
-> roadmap.
+> privacy policy and terms, encrypted nightly backups with a tested restore), and an organization
+> can erase a recipient's data on request; deploying to credforge.app is next. See the
+> [design plan](docs/design-plan.md) for the architecture and the roadmap.
 
 ## Requirements
 
@@ -62,6 +62,12 @@ And M5:
   website; public pages then say "Website verified" instead of "self-reported".
 - **Public pages:** the landing page at `/`, `/privacy` and `/terms` (drafts for review), and
   "Report a problem" on badge, achievement and issuer pages.
+- **Erase this person's data** (a badge's screen, owners and admins): for a request to delete a
+  recipient's data. It first lists what it covers (every badge awarded to that address, badges
+  linked to them by a reissue, CSV rows holding it), then revokes the badges for good and removes
+  the signed credentials, the name and address from badges, emails and CSV rows, the uploaded CSV
+  files, and makes what the audit log says about the person unreadable. The badge's address then
+  answers 410 Gone; copies of it check as revoked. See the design plan, §12.1.
 
 No configuration is needed for development. To override a default (for example to try Google or
 Microsoft sign-in with development OAuth clients), copy `.env.development.example` to
@@ -87,6 +93,8 @@ two-step verification (TOTP) before they can continue, whichever way they sign i
 | `pnpm infra:down` | Stop PostgreSQL and Mailpit (data is kept) |
 | `pnpm --filter @credforge/server cli publish-status-lists` | Re-sign status lists with revocations the worker hasn't published yet (`--all` for every list) |
 | `pnpm --filter @credforge/server cli revoke-org-credentials --org <id> --reason …` | Revoke every badge of a suspended organization (abuse); without `--yes` it only counts them |
+| `pnpm --filter @credforge/server cli erase-recipient --org <id> --email …` | Erase a recipient's data from an organization's records, for a request that reaches the operator (or `--credential <id>`); without `--yes` it only says what it would erase |
+| `pnpm --filter @credforge/server cli reapply-erasures` | After restoring a backup: erase again whoever was erased since it was taken (`deploy/restore.sh` runs it) |
 
 ### Tests
 
@@ -97,7 +105,9 @@ creates and drops its own database there. The integration suite includes a cross
 tries every organization-scoped endpoint against another organization's data (with a session and
 with an API key), and every JSON response from `/api/v1` in every test is checked against its
 schema in the OpenAPI document; another test fails if a route is missing from the document. Domain
-verification uses a stand-in for DNS and HTTPS lookups. Batches, revocation
+verification uses a stand-in for DNS and HTTPS lookups. Erasing a recipient is checked end to end
+in the database: nothing about the person is left in badges, emails, queued email jobs, CSV rows,
+uploads or the audit log, while the badges stay revoked. Batches, revocation
 and the worker's jobs are tested by running the job functions directly against the test database;
 verification of other issuers' credentials uses a stand-in fetcher that serves the
 `packages/ob3` sample issuer.
@@ -122,7 +132,9 @@ be running), search and filter the awarded badges, open the bulk revoke panel an
 revoke a badge and check its public page, and use the `/verify` page. The M5 tests create an API
 key (shown once), use it without cookies, revoke it, open the website verification instructions,
 and check the landing page, the draft privacy policy and terms, the "Report a problem" link and the
-API docs (no CSP errors).
+API docs (no CSP errors). The erasure test sets up an organization of its own, reviews what erasing
+a recipient would cover, confirms it, and checks the erased badge's screen and its public page
+(410).
 Any violation fails the test. It also checks keyboard behaviour that broke before: the mobile menu
 takes focus, keeps Tab inside it and returns focus on Escape, its organization switcher is
 labelled, cancelling a confirm button returns focus to it, and step changes move focus to the new
@@ -204,6 +216,10 @@ This starts `db`, runs `migrate` once, and then starts `app` and `worker`. The a
   bucket with its own key (`backup.env`, from `backup.env.example`); `deploy/restore.sh` restores
   one. Setup, the restore procedure and the drill that was run are in
   [docs/restore-drill.md](docs/restore-drill.md).
+- **Erasing a recipient's data** also writes a small record without personal data (the badge and
+  CSV row ids) to the files bucket under `erasures/`. A backup taken before an erasure still holds
+  that person's data, so `deploy/restore.sh` runs `node dist/cli.js reapply-erasures` after
+  restoring; backups themselves age out after 30 days.
 - **Logs** are rotated by Docker (5 × 10 MB per container). Secrets in URLs (claim, reset,
   confirmation and invitation links, OAuth codes) and the addresses checked with `/verify` are
   removed from request logs.

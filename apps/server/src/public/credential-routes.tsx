@@ -27,6 +27,7 @@ import { negotiate } from './negotiate';
 import { AchievementPage } from './pages/achievement';
 import { CertificatePage } from './pages/certificate';
 import { CredentialPage, type CredentialView } from './pages/credential';
+import { ErasedCredentialPage } from './pages/erased';
 import { TooManyRequestsPage } from './pages/too-many';
 
 /** JSON first for verifiers that send no Accept header (or `*\/*`); browsers ask for HTML. */
@@ -75,10 +76,13 @@ const asString = (value: unknown): string | undefined =>
   typeof value === 'string' ? value : undefined;
 const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
+/** A credential that still has its signed document (its recipient wasn't erased). */
+type LiveCredentialRow = CredentialRow & { document: Record<string, unknown> };
+
 /** What the page shows, from the signed document: the credential as it was issued. */
 function credentialView(
   publicBaseUrl: string,
-  row: CredentialRow,
+  row: LiveCredentialRow,
   image: FileRow | undefined,
 ): CredentialView {
   const doc = row.document;
@@ -173,6 +177,23 @@ export function withRevocation(
   };
 }
 
+/**
+ * The recipient acting through their claim link: their name, IP address and browser go into the
+ * event's sealed recipient details (design plan §12.1), not its plain columns.
+ */
+function recipientActing(row: CredentialRow, request: FastifyRequest) {
+  return row.auditKey
+    ? {
+        recipient: {
+          key: row.auditKey,
+          actorLabel: row.recipientName,
+          ip: request.ip,
+          userAgent: request.headers['user-agent'] ?? null,
+        },
+      }
+    : {};
+}
+
 /** LinkedIn's "add a license or certification" link (design plan §5.3). */
 export function linkedInUrl(view: CredentialView, url: string, id: string): string {
   const params = new URLSearchParams({
@@ -240,10 +261,56 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
       : undefined;
   }
 
+  /**
+   * 410 Gone for a credential whose recipient's data was erased (design plan §12.1): a page
+   * naming only the issuer and the achievement, or a problem document for verifiers.
+   */
+  async function sendGone(request: FastifyRequest, reply: FastifyReply, row: CredentialRow) {
+    reply
+      .code(410)
+      .header('x-robots-tag', 'noindex')
+      .header('cache-control', 'public, max-age=300')
+      .header('vary', 'Accept');
+    if (negotiate(request.headers.accept, DOCUMENT_OFFERS) !== 'text/html') {
+      reply.header('access-control-allow-origin', '*');
+      return reply.type('application/problem+json; charset=utf-8').send(
+        JSON.stringify({
+          type: 'about:blank',
+          title: 'Credential erased',
+          status: 410,
+          detail:
+            'The issuer revoked this credential and removed its details. Copies of it check as revoked.',
+          code: 'credential_erased',
+        }),
+      );
+    }
+    const [names] = await db
+      .select({ issuerName: issuer.name, achievementName: achievement.name })
+      .from(issuer)
+      .innerJoin(achievement, eq(achievement.id, row.achievementId))
+      .where(eq(issuer.id, row.issuerId));
+    return sendHtml(
+      reply,
+      renderDocument(
+        <ErasedCredentialPage
+          url={credentialUrl(base, row.id)}
+          stylesheet={assets.stylesheet}
+          issuer={{
+            name: names?.issuerName ?? 'The issuer',
+            pageUrl: issuerUrl(base, row.issuerId),
+          }}
+          achievementName={names?.achievementName ?? null}
+        />,
+      ),
+    );
+  }
+
   app.get('/credentials/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const row = await loadCredential(id);
-    if (!row) return reply.callNotFound();
+    const found = await loadCredential(id);
+    if (!found) return reply.callNotFound();
+    if (!found.document) return sendGone(request, reply, found);
+    const row: LiveCredentialRow = { ...found, document: found.document };
     const url = credentialUrl(base, row.id);
     const query = request.query as { t?: string; link?: string };
 
@@ -289,10 +356,10 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
           if (first) {
             await recordAudit(tx, {
               orgId: row.orgId,
-              actor: { type: 'recipient', label: row.recipientName },
+              actor: { type: 'recipient' },
               action: 'credential.claimed',
               target: { type: 'credential', id: row.id },
-              request: { ip: request.ip, userAgent: request.headers['user-agent'] ?? null },
+              ...recipientActing(row, request),
             });
           }
         });
@@ -378,6 +445,7 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
     const { id } = request.params as { id: string };
     const row = await loadCredential(id);
     if (!row) return reply.callNotFound();
+    if (!row.document) return sendGone(request, reply, row);
     const url = credentialUrl(base, row.id);
     if (!isSameOrigin(request, base) || !isOwner(request, row)) {
       return reply
@@ -395,24 +463,35 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
           .where(eq(credential.id, row.id));
         await recordAudit(tx, {
           orgId: row.orgId,
-          actor: { type: 'recipient', label: row.recipientName },
+          actor: { type: 'recipient' },
           action: wanted === 'hidden' ? 'credential.hidden' : 'credential.shown',
           target: { type: 'credential', id: row.id },
-          request: { ip: request.ip, userAgent: request.headers['user-agent'] ?? null },
+          ...recipientActing(row, request),
         });
       });
     }
     return reply.redirect(url, 303);
   });
 
-  /** Loads a credential for a download; null (after a 404) when it doesn't exist or is hidden. */
-  async function downloadable(request: FastifyRequest, reply: FastifyReply) {
+  /**
+   * Loads a credential for a download; null (after a 404, or a 410 once its recipient's data was
+   * erased) when it doesn't exist or is hidden.
+   */
+  async function downloadable(
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<LiveCredentialRow | null> {
     const { id } = request.params as { id: string };
-    const row = await loadCredential(id);
-    if (!row) {
+    const found = await loadCredential(id);
+    if (!found) {
       await reply.callNotFound();
       return null;
     }
+    if (!found.document) {
+      await sendGone(request, reply, found);
+      return null;
+    }
+    const row: LiveCredentialRow = { ...found, document: found.document };
     const owner = isOwner(request, row);
     if (row.visibility === 'hidden' && !owner) {
       await reply.callNotFound();
@@ -427,7 +506,7 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
     return row;
   }
 
-  const fileName = (row: CredentialRow, extension: string) =>
+  const fileName = (row: LiveCredentialRow, extension: string) =>
     `${slug(asString(asRecord(asRecord(row.document.credentialSubject).achievement).name) ?? 'badge')}.${extension}`;
 
   app.get('/credentials/:id/credential.json', async (request, reply) => {

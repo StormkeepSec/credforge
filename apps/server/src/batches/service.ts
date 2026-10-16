@@ -25,6 +25,7 @@ import {
   gt,
   gte,
   inArray,
+  isNull,
   issuanceBatch,
   issuanceBatchRow,
   lt,
@@ -321,7 +322,7 @@ export async function updateBatch(
       const rows = await tx
         .select({ cells: issuanceBatchRow.cells })
         .from(issuanceBatchRow)
-        .where(eq(issuanceBatchRow.batchId, batchId))
+        .where(and(eq(issuanceBatchRow.batchId, batchId), isNull(issuanceBatchRow.erasedAt)))
         .orderBy(asc(issuanceBatchRow.rowNumber))
         .limit(51);
       const headers = headersFor(rows[0]?.cells ?? [], columns.length, hasHeader);
@@ -391,6 +392,7 @@ export async function validateBatch(tx: Queryable, orgId: string, batchId: strin
       and(
         eq(issuanceBatchRow.batchId, batchId),
         gte(issuanceBatchRow.rowNumber, firstDataRow(batch)),
+        isNull(issuanceBatchRow.erasedAt),
       ),
     )
     .orderBy(asc(issuanceBatchRow.rowNumber));
@@ -417,7 +419,7 @@ export async function validateBatch(tx: Queryable, orgId: string, batchId: strin
           inArray(credential.recipientEmail, emails.slice(start, start + INSERT_CHUNK)),
         ),
       );
-    for (const row of found) holders.add(row.email);
+    for (const row of found) if (row.email) holders.add(row.email);
   }
 
   const firstSeen = new Map<string, number>();
@@ -461,7 +463,13 @@ export async function validateBatch(tx: Queryable, orgId: string, batchId: strin
     await tx
       .update(issuanceBatchRow)
       .set({ values: null, validation: 'invalid', issues: [] })
-      .where(and(eq(issuanceBatchRow.batchId, batchId), eq(issuanceBatchRow.rowNumber, 1)));
+      .where(
+        and(
+          eq(issuanceBatchRow.batchId, batchId),
+          eq(issuanceBatchRow.rowNumber, 1),
+          isNull(issuanceBatchRow.erasedAt),
+        ),
+      );
   }
 }
 
@@ -565,7 +573,7 @@ export async function confirmBatch(
           "error_code" = case when "validation" in ${awarded} then null else "validation" end,
           "error_message" = case when "validation" in ${awarded} then null
                                  else coalesce("issues"->0->>'message', 'Not awarded') end
-      where "batch_id" = ${batchId} and "row_number" >= ${first}`);
+      where "batch_id" = ${batchId} and "row_number" >= ${first} and "erased_at" is null`);
     const now = new Date();
     await tx
       .update(issuanceBatch)
@@ -1040,6 +1048,7 @@ export async function loadBatchDetails(
       and(
         eq(issuanceBatchRow.batchId, batchId),
         gte(issuanceBatchRow.rowNumber, firstDataRow(batch)),
+        isNull(issuanceBatchRow.erasedAt),
       ),
     )
     .orderBy(asc(issuanceBatchRow.rowNumber))
@@ -1092,6 +1101,7 @@ export function serializeBatchRow(publicBaseUrl: string, row: BatchRowRecord): B
       ? { id: row.credentialId, url: credentialUrl(publicBaseUrl, row.credentialId) }
       : null,
     error: row.errorCode ? { code: row.errorCode, message: row.errorMessage ?? '' } : null,
+    erasedAt: row.erasedAt?.toISOString() ?? null,
   };
 }
 
@@ -1161,7 +1171,7 @@ export async function* resultsCsv(
         row.rowNumber,
         row.values?.name ?? '',
         row.values?.email ?? '',
-        STATUS_WORDS[row.status] ?? row.status,
+        row.erasedAt ? 'erased' : (STATUS_WORDS[row.status] ?? row.status),
         row.credentialId ? credentialUrl(publicBaseUrl, row.credentialId) : '',
         problem,
         ...customKeys.map((key) => row.values?.custom[key] ?? ''),

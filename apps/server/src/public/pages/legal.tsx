@@ -195,12 +195,41 @@ export function PrivacyPage({
           search engines not to index them.
         </p>
         <p>
-          If something on a badge is wrong, or you want it removed, contact the organization that
-          awarded it first: they can correct it (by reissuing it) or revoke it. You can also contact
-          us.{' '}
+          If something on a badge is wrong, contact the organization that awarded it: they can
+          correct it (by reissuing it) or revoke it.
+        </p>
+        <p>
+          <strong>To have your data deleted</strong>, ask the organization that awarded the badge,
+          or write to <Mail address={facts.privacyEmail} fallback="privacy contact address" /> and
+          we’ll pass your request on (or, if the organization doesn’t answer, handle it ourselves).
+          Erasing your data:
+        </p>
+        <ul>
+          <li>
+            covers every badge that organization awarded to your email address, and revokes them for
+            good;
+          </li>
+          <li>
+            removes your name, your email address and the signed badges from its records on{' '}
+            {facts.siteName}: the badges, the emails we sent, the rows of any spreadsheet it
+            uploaded, and the spreadsheets themselves;
+          </li>
+          <li>
+            makes what its audit log says about you unreadable: the log keeps a record that a badge
+            was awarded and erased, but no longer who it was for;
+          </li>
+          <li>
+            replaces each badge’s page with a notice that the badge was removed. Any copy of a badge
+            (a downloaded file or badge image) still checks as revoked.
+          </li>
+        </ul>
+        <p>
+          Erasing can’t reach copies outside {facts.siteName}: badges you downloaded or shared (for
+          example on LinkedIn), emails already delivered, or records the organization exported. Our
+          database backups keep a copy for up to 30 days before they are deleted; if we ever restore
+          one, erasures made since are applied again.{' '}
           <ToFill>
-            Decide how deletion requests are handled: credforge has no self-service deletion of a
-            recipient’s data yet.
+            How quickly deletion requests are answered (for example, within one month).
           </ToFill>
         </p>
       </Section>
@@ -236,8 +265,11 @@ export function PrivacyPage({
           </li>
           <li>
             <strong>Audit log:</strong> every change in an organization is recorded with who made
-            it, when, their IP address and browser. Awards are recorded with the recipient’s name
-            and email address. This log can’t be edited or deleted, so that badges stay accountable.
+            it, when, their IP address and browser. This log can’t be edited or deleted, so that
+            badges stay accountable. What it says about a badge’s recipient (their name, email
+            address, and their IP address and browser when they open or hide their badge) is
+            encrypted with a key kept with that badge, and erasing the recipient’s data deletes the
+            key.
           </li>
         </ul>
         <p>
@@ -305,7 +337,8 @@ export function PrivacyPage({
         <ul>
           <li>
             <strong>Badges</strong> are kept as long as the organization that awarded them, so they
-            can still be checked. A revoked badge stays recorded as revoked.
+            can still be checked, unless the recipient’s data is erased. A revoked badge stays
+            recorded as revoked.
           </li>
           <li>
             <strong>Spreadsheets</strong> uploaded to award many badges are deleted after 30 days.
@@ -315,7 +348,8 @@ export function PrivacyPage({
             one). Invitations expire after 7 days.
           </li>
           <li>
-            <strong>Database backups</strong> are kept for 30 days.
+            <strong>Database backups</strong> are kept for 30 days. Restoring one applies again any
+            erasure made after it was taken.
           </li>
           <li>
             <strong>Server logs</strong> (IP address and the page requested, with links’ secret
@@ -439,6 +473,11 @@ export function TermsPage({
             badges, under the laws that apply to you.
           </li>
           <li>Correct or revoke a badge when it turns out to be wrong.</li>
+          <li>
+            Answer recipients’ requests about their data. To delete a recipient’s data, use “Erase
+            this person’s data” on one of their badges; we may do it for you when a request reaches
+            us and you don’t answer.
+          </li>
           <li>
             You keep the rights to your content (names, descriptions, images). You let us store,
             sign, publish and send it to run the service, including after you leave, so that badges

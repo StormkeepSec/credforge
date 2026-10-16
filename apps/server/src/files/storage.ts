@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, sep } from 'node:path';
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, sep } from 'node:path';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -23,6 +24,8 @@ export interface Storage {
   /** The object's bytes, or null if there is none. */
   get(key: string): Promise<Buffer | null>;
   delete(key: string): Promise<void>;
+  /** Every key under a prefix such as `erasures/` (it ends in `/`), in no particular order. */
+  list(prefix: string): Promise<string[]>;
 }
 
 export class StorageKeyError extends Error {
@@ -72,6 +75,19 @@ export function createLocalStorage(root: string): Storage {
     },
     async delete(key) {
       await rm(pathOf(key), { force: true });
+    },
+    async list(prefix) {
+      assertStorageKey(`${prefix}x`);
+      const directory = join(root, ...prefix.split('/').filter(Boolean));
+      try {
+        const entries = await readdir(directory, { recursive: true, withFileTypes: true });
+        return entries
+          .filter((entry) => entry.isFile() && !entry.name.endsWith('.tmp'))
+          .map((entry) => relative(root, join(entry.parentPath, entry.name)).split(sep).join('/'));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw error;
+      }
     },
   };
 }
@@ -124,6 +140,19 @@ export function createS3Storage(config: S3Config, client?: S3Sender): Storage {
     async delete(key) {
       assertStorageKey(key);
       await s3.send(new DeleteObjectCommand({ Bucket, Key: key }));
+    },
+    async list(prefix) {
+      assertStorageKey(`${prefix}x`);
+      const keys: string[] = [];
+      let ContinuationToken: string | undefined;
+      do {
+        const page = await s3.send(
+          new ListObjectsV2Command({ Bucket, Prefix: prefix, ContinuationToken }),
+        );
+        for (const object of page.Contents ?? []) if (object.Key) keys.push(object.Key);
+        ContinuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (ContinuationToken);
+      return keys;
     },
   };
 }

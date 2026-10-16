@@ -60,6 +60,8 @@ function describe(action: string): string {
 
 function details(event: AuditEvent): string | null {
   const data = event.data as Record<string, unknown>;
+  // Sealed with the badge's key, which erasing the recipient's data deleted (design plan §12.1).
+  if (data.recipientDetails === 'erased') return 'Recipient’s details erased';
   if (typeof data.email === 'string' && typeof data.role === 'string')
     return `${data.email} · ${data.role}`;
   if (typeof data.from === 'string' && typeof data.to === 'string') {

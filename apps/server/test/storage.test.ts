@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
   NoSuchKey,
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
@@ -30,6 +31,22 @@ function behavesLikeStorage(make: () => Storage) {
     await storage.delete(key);
     expect(await storage.get(key)).toBeNull();
     await storage.delete(key); // deleting what isn't there is fine
+  });
+
+  it('lists the keys under a prefix', async () => {
+    const storage = make();
+    const prefix = `test/${randomBytes(6).toString('hex')}/`;
+    const outside = `${prefix.slice(0, -1)}-other/c.json`;
+    expect(await storage.list(prefix)).toEqual([]);
+    await storage.put(`${prefix}a.json`, Buffer.from('{}'), 'application/json');
+    await storage.put(`${prefix}deeper/b.json`, Buffer.from('{}'), 'application/json');
+    await storage.put(outside, Buffer.from('{}'), 'text/plain');
+    expect((await storage.list(prefix)).sort()).toEqual([
+      `${prefix}a.json`,
+      `${prefix}deeper/b.json`,
+    ]);
+    for (const key of await storage.list(prefix)) await storage.delete(key);
+    await storage.delete(outside);
   });
 
   it('refuses keys credforge never makes', async () => {
@@ -70,6 +87,14 @@ function fakeS3() {
       if (command instanceof DeleteObjectCommand) {
         objects.delete(input.Key);
         return {};
+      }
+      if (command instanceof ListObjectsV2Command) {
+        const prefix = command.input.Prefix ?? '';
+        return {
+          Contents: [...objects.keys()]
+            .filter((key) => key.startsWith(prefix))
+            .map((Key) => ({ Key })),
+        };
       }
       throw new Error('unexpected command');
     },

@@ -34,16 +34,17 @@ const SUPERSEDED_REASON = 'Replaced by a corrected copy.';
 
 /**
  * Revokes credentials in the caller's transaction (design plan §8.6): marks them revoked, sets
- * their bits in the status lists, writes an audit event for each, and asks the worker to re-sign
- * the changed lists. Call with the rows locked and still `issued`.
+ * their bits in the status lists, writes an audit event for each (unless `actor` is null: erasure
+ * writes its own), and asks the worker to re-sign the changed lists. Call with the rows locked and
+ * still `issued`.
  */
-async function revokeRows(
+export async function revokeRows(
   tx: Queryable,
   services: Pick<RevocationServices, 'jobs'>,
   orgId: string,
   rows: CredentialRow[],
   details: RevokeDetails,
-  actor: AuditActor,
+  actor: AuditActor | null,
   request: RequestInfo,
 ): Promise<void> {
   if (rows.length === 0) return;
@@ -77,20 +78,28 @@ async function revokeRows(
         : [],
     ),
   );
-  for (const row of rows) {
+  for (const row of actor ? rows : []) {
+    // The reasons are the org's own words and may name the person: sealed with the rest (§12.1).
     await recordAudit(tx, {
       orgId,
-      actor,
+      actor: actor as AuditActor,
       action: 'credential.revoked',
       target: { type: 'credential', id: row.id },
       data: {
         kind,
-        reason: details.reason,
-        ...(details.publicReason && { publicReason: details.publicReason }),
         ...(details.replacedById && { replacedBy: details.replacedById }),
-        recipientName: row.recipientName,
-        recipientEmail: row.recipientEmail,
       },
+      ...(row.auditKey && {
+        recipient: {
+          key: row.auditKey,
+          data: {
+            reason: details.reason,
+            publicReason: details.publicReason,
+            recipientName: row.recipientName,
+            recipientEmail: row.recipientEmail,
+          },
+        },
+      }),
       request,
     });
   }
@@ -182,7 +191,9 @@ export async function reissueCredential(
       .where(and(eq(credential.orgId, orgId), eq(credential.id, credentialId)))
       .for('update');
     if (!old) throw notFound('Credential');
-    if (old.status !== 'issued') throw alreadyRevoked();
+    if (old.status !== 'issued' || !old.recipientName || !old.recipientEmail) {
+      throw alreadyRevoked();
+    }
 
     const award: ParsedAward = {
       achievementId: old.achievementId,
@@ -227,7 +238,8 @@ export async function reissueCredential(
       actor,
       action: 'credential.reissued',
       target: { type: 'credential', id: old.id },
-      data: { replacedBy: newId, changed, ...(input.reason && { reason: input.reason }) },
+      data: { replacedBy: newId, changed },
+      ...(old.auditKey && { recipient: { key: old.auditKey, data: { reason: input.reason } } }),
       request,
     });
     return newId;
