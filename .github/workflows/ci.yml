@@ -1,5 +1,6 @@
-# Dormant until the repository is hosted on GitHub. Locally, `pnpm check` runs the same checks
-# (and the pre-push hook runs it automatically). M5 adds image scanning and SHA-pinned actions.
+# Runs on GitHub (github.com/StormkeepSec/credforge) for pushes to main and pull requests.
+# Locally, `pnpm check` runs the same checks (the pre-push hook runs it automatically). Image
+# scanning, SHA-pinned actions and publishing an image are still to add (design plan §15).
 name: CI
 
 on:

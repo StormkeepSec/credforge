@@ -15,7 +15,7 @@ x-logging: &logging
 
 x-app: &app
   logging: *logging
-  image: credforge:${CREDFORGE_VERSION:-latest} # becomes a registry path once the repo is hosted
+  image: credforge:${CREDFORGE_VERSION:-latest} # a registry path once CI publishes images
   build: .
   env_file: .env
   environment: &app-env
