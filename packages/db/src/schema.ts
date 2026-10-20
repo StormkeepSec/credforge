@@ -129,6 +129,35 @@ export const verification = pgTable(
   (table) => [index('verification_identifier_idx').on(table.identifier)],
 );
 
+/**
+ * More addresses a person receives badges at (design plan §8.8, decision 52): "My badges" lists
+ * badges awarded to the account's own address and to each address here once it is confirmed
+ * through a link emailed to it. They are never sign-in addresses. Only the SHA-256 of the
+ * confirmation token is stored. The same address may be confirmed on more than one account: each
+ * proved it can read that inbox, as a claim link does, and refusing would tell a stranger the
+ * address is already someone's.
+ */
+export const userEmail = pgTable(
+  'user_email',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    /** Normalized: trimmed and lowercase, as awards store it. */
+    email: text('email').notNull(),
+    /** Set when the person opened the confirmation link while signed in to this account. */
+    verifiedAt: timestamptz('verified_at'),
+    tokenHash: text('token_hash').unique(),
+    tokenExpiresAt: timestamptz('token_expires_at'),
+    /** When the latest confirmation email was sent (sending again waits a minute). */
+    sentAt: timestamptz('sent_at'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [uniqueIndex('user_email_user_email_idx').on(table.userId, table.email)],
+);
+
 /** TOTP secret and backup codes, both encrypted by Better Auth under AUTH_SECRET. */
 export const twoFactor = pgTable('two_factor', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -794,6 +823,10 @@ export const credential = pgTable(
     index('credential_org_created_idx').on(table.orgId, table.createdAt),
     index('credential_achievement_idx').on(table.achievementId),
     index('credential_org_email_idx').on(table.orgId, table.recipientEmail),
+    // "My badges" looks a person's addresses up across every org (design plan §8.8).
+    index('credential_recipient_email_idx')
+      .on(table.recipientEmail)
+      .where(sql`${table.recipientEmail} is not null`),
     index('credential_org_batch_idx').on(table.orgId, table.batchId),
     uniqueIndex('credential_status_entry_idx').on(table.statusListId, table.statusListIndex),
     uniqueIndex('credential_batch_row_idx')

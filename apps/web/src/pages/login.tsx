@@ -1,11 +1,10 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { type FormEvent, useState } from 'react';
 import { AuthLayout, ProviderButtons } from '../components/auth-layout';
 import { Button } from '../components/ui/button';
 import { Alert } from '../components/ui/feedback';
 import { Field, Input } from '../components/ui/input';
-import { queries } from '../lib/api';
 import { authClient, authErrorMessage, oauthErrorMessage } from '../lib/auth-client';
 import { safeRedirect } from '../lib/utils';
 
@@ -16,7 +15,6 @@ export function LoginPage({
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { data: instance } = useQuery(queries.instance());
   const [email, setEmail] = useState(search.email ?? '');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(
@@ -48,18 +46,17 @@ export function LoginPage({
       title="Sign in"
       description="Welcome back to credforge."
       footer={
-        instance?.signupMode !== 'invite' && (
-          <>
-            New here?{' '}
-            <Link
-              to="/signup"
-              search={{ redirect: search.redirect }}
-              className="font-semibold text-link underline-offset-4 hover:underline"
-            >
-              Create an account
-            </Link>
-          </>
-        )
+        // Every mode: invite-only instances still accept people who were awarded a badge there.
+        <>
+          New here?{' '}
+          <Link
+            to="/signup"
+            search={{ redirect: search.redirect }}
+            className="font-semibold text-link underline-offset-4 hover:underline"
+          >
+            Create an account
+          </Link>
+        </>
       }
     >
       <div className="grid gap-5">

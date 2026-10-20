@@ -1,8 +1,10 @@
 import {
+  accountEmailSchema,
   achievementInput,
   achievementRevisionSchema,
   achievementSchema,
   achievementsQuery,
+  addEmailInput,
   apiKeySchema,
   auditEventPageSchema,
   auditEventsQuery,
@@ -18,6 +20,7 @@ import {
   batchRowsQuery,
   bulkRevokeInput,
   bulkRevokeResultSchema,
+  confirmEmailInput,
   createApiKeyInput,
   createBatchFromRowsInput,
   createdApiKeySchema,
@@ -43,6 +46,9 @@ import {
   platformOrgSchema,
   platformOrgsQuery,
   problemSchema,
+  recipientCredentialPageSchema,
+  recipientCredentialSchema,
+  recipientCredentialsQuery,
   recipientErasurePreviewSchema,
   recipientErasureResultSchema,
   reissueInput,
@@ -52,6 +58,7 @@ import {
   updateIssuerInput,
   updateMemberInput,
   updateOrgInput,
+  updateRecipientCredentialInput,
   verifyInput,
   verifyResultSchema,
 } from '@credforge/contracts';
@@ -148,6 +155,7 @@ const MEMBERS = 'Members and invitations';
 const KEYS = 'API keys';
 const AUDIT = 'Audit log';
 const ACCOUNT = 'Account';
+const MY_BADGES = 'My badges';
 const PLATFORM_TAG = 'Platform';
 
 export const OPERATIONS: readonly Operation[] = [
@@ -167,6 +175,84 @@ export const OPERATIONS: readonly Operation[] = [
     summary: 'The signed-in person, their sign-in methods and memberships',
     auth: SESSION,
     responses: [ok(meResponseSchema)],
+  },
+
+  // ---- My badges: the signed-in person's own badges (design plan §8.8) ----
+  {
+    method: 'GET',
+    path: '/me/credentials',
+    tag: MY_BADGES,
+    summary: 'Badges awarded to your confirmed addresses, by any organization',
+    description:
+      'Newest first. Matches the account’s own address once it is verified (credforge’s confirmation email, Google’s `email_verified` or Microsoft’s `xms_edov`) and the extra addresses confirmed under `/me/emails`. An unverified account sees nothing. Erased badges are never listed; hidden ones are.',
+    auth: SESSION,
+    query: recipientCredentialsQuery,
+    responses: [ok(recipientCredentialPageSchema)],
+  },
+  {
+    method: 'GET',
+    path: '/me/credentials/{credentialId}',
+    tag: MY_BADGES,
+    summary: 'One of your badges',
+    auth: SESSION,
+    responses: [ok(recipientCredentialSchema)],
+  },
+  {
+    method: 'PATCH',
+    path: '/me/credentials/{credentialId}',
+    tag: MY_BADGES,
+    summary: 'Hide your badge’s public page, or make it public again',
+    description:
+      'A hidden page answers “not found” to everyone but you, downloads included. Recorded in the awarding organization’s audit log as the recipient’s change, as through the claim link.',
+    auth: SESSION,
+    body: updateRecipientCredentialInput,
+    responses: [ok(recipientCredentialSchema)],
+  },
+  {
+    method: 'GET',
+    path: '/me/emails',
+    tag: MY_BADGES,
+    summary: 'Extra addresses you receive badges at',
+    auth: SESSION,
+    responses: [ok(z.object({ emails: z.array(accountEmailSchema) }))],
+  },
+  {
+    method: 'POST',
+    path: '/me/emails',
+    tag: MY_BADGES,
+    summary: 'Add an address and email it a confirmation link',
+    description:
+      'Up to 5 addresses. Badges awarded to it show once the link is opened while signed in to this account. It never becomes a way to sign in.',
+    auth: SESSION,
+    body: addEmailInput,
+    responses: [created(accountEmailSchema)],
+  },
+  {
+    method: 'POST',
+    path: '/me/emails/confirm',
+    tag: MY_BADGES,
+    summary: 'Confirm an address with the token from its link',
+    description: 'The link must belong to the signed-in account.',
+    auth: SESSION,
+    body: confirmEmailInput,
+    responses: [ok(accountEmailSchema)],
+  },
+  {
+    method: 'POST',
+    path: '/me/emails/{emailId}/resend',
+    tag: MY_BADGES,
+    summary: 'Send a new confirmation link',
+    description: 'Earlier links stop working. At most one a minute per address.',
+    auth: SESSION,
+    responses: [ok(accountEmailSchema)],
+  },
+  {
+    method: 'DELETE',
+    path: '/me/emails/{emailId}',
+    tag: MY_BADGES,
+    summary: 'Remove an address',
+    auth: SESSION,
+    responses: [noContent('Removed')],
   },
 
   // ---- organizations ----

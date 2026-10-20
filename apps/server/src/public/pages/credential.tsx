@@ -43,14 +43,22 @@ export interface OwnerView {
   visibility: 'public' | 'hidden';
   linkedInUrl: string;
   visibilityAction: string;
+  /**
+   * `owner`: signed in with the address the badge was awarded to. `other`: signed in to an
+   * account without that address (they hold the claim link). `null`: not signed in.
+   */
+  account: 'owner' | 'other' | null;
 }
+
+/** Where the invitations to keep badges in one place lead after signing in (design plan §8.8). */
+export const MY_BADGES_PATH = '/app/badges';
 
 export interface CredentialPageProps {
   url: string;
   stylesheet: string;
   credential: CredentialView;
   verification: CredentialVerification;
-  /** Set when the visitor holds the recipient's claim link. */
+  /** Set when the visitor is the recipient: holding the claim link, or signed in with its address. */
   owner: OwnerView | null;
   /** A claim link that didn't work. */
   notice: 'link_expired' | null;
@@ -122,6 +130,48 @@ const CHECK_LABELS = {
 
 const OUTCOME_WORDS = { passed: 'passed', failed: 'failed', skipped: 'not checked' } as const;
 
+/**
+ * In the recipient's box: where to see all their badges (design plan §8.8). Signed in with the
+ * badge's address, a link to My badges; signed in without it, where to add the address; signed
+ * out, an invitation to sign in or create an account with that address.
+ */
+function KeepBadges({ account }: { account: OwnerView['account'] }) {
+  const next = encodeURIComponent(MY_BADGES_PATH);
+  return (
+    <p className="mt-4 border-t border-ink/10 pt-4 text-sm text-ink-muted">
+      {account === 'owner' ? (
+        <>
+          It’s in your{' '}
+          <a href={MY_BADGES_PATH} className={link}>
+            My badges
+          </a>{' '}
+          list, with every other badge awarded to your addresses.
+        </>
+      ) : account === 'other' ? (
+        <>
+          To see it with your other badges, add the address it was sent to in{' '}
+          <a href="/app/settings" className={link}>
+            Account settings
+          </a>
+          .
+        </>
+      ) : (
+        <>
+          Keep all your badges in one place:{' '}
+          <a href={`/signup?redirect=${next}`} className={link}>
+            create a free account
+          </a>{' '}
+          or{' '}
+          <a href={`/login?redirect=${next}`} className={link}>
+            sign in
+          </a>{' '}
+          with the address this badge was sent to. No organization needed.
+        </>
+      )}
+    </p>
+  );
+}
+
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <section aria-labelledby={id} className="border-t border-ink/10 py-8">
@@ -136,7 +186,7 @@ function Section({ id, title, children }: { id: string; title: string; children:
 /**
  * The public credential page (design plan §11.2): the badge first, then what it is, who earned
  * it and who awarded it, the separate verification checks, and downloads. The recipient (holding
- * their claim link) also sees Add to LinkedIn and can hide the page.
+ * their claim link, or signed in with its address) also sees Add to LinkedIn and can hide the page.
  */
 export function CredentialPage({
   url,
@@ -175,8 +225,13 @@ export function CredentialPage({
             <div role="note" className="mb-8 rounded-lg border border-warning/40 bg-warning/5 p-4">
               <p className="font-semibold">This link no longer works</p>
               <p className="mt-1 text-sm text-ink-muted">
-                It has expired, or a newer one was sent. Ask {c.issuer.name} to send you a new link.
-                Anyone can still see the badge below.
+                It has expired, or a newer one was sent. Ask {c.issuer.name} to send you a new link,
+                or{' '}
+                <a href={`/login?redirect=${encodeURIComponent(MY_BADGES_PATH)}`} className={link}>
+                  sign in to credforge
+                </a>{' '}
+                with the address it was sent to and find it in My badges. Anyone can still see the
+                badge below if its page is public.
               </p>
             </div>
           )}
@@ -190,7 +245,7 @@ export function CredentialPage({
               </h2>
               <p className="mt-1 text-sm text-ink-muted">
                 {owner.visibility === 'hidden'
-                  ? 'Its page is hidden: only you see it, through your link. Others get “page not found”.'
+                  ? `Its page is hidden: only you see it, ${owner.account === 'owner' ? 'signed in to credforge' : 'through your link'}. Others get “page not found”.`
                   : 'Its page is public: anyone with its address can see it. Only you see this box.'}
               </p>
               <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -208,6 +263,7 @@ export function CredentialPage({
                   </button>
                 </form>
               </div>
+              <KeepBadges account={owner.account} />
             </section>
           )}
 

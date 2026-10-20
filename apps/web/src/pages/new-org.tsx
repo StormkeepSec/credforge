@@ -1,17 +1,20 @@
-import { createOrgInput, ROLE_LABELS } from '@credforge/contracts';
+import { createOrgInput } from '@credforge/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { Building2, Mail } from 'lucide-react';
+import { Building2 } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { PageHeader } from '../components/app-shell';
+import { InvitationsCard } from '../components/invitations-card';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Alert } from '../components/ui/feedback';
 import { Field, Input } from '../components/ui/input';
 import { ApiError, errorMessage, post, queries } from '../lib/api';
-import { formatDate } from '../lib/utils';
 
-/** Name your organization (onboarding step 3), or join one you were invited to. */
+/**
+ * Name your organization (onboarding step 3), or join one you were invited to. People who only
+ * receive badges never need this: they start at My badges, one step away from here.
+ */
 export function NewOrgPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -31,14 +34,6 @@ export function NewOrgPage() {
     },
   });
 
-  const accept = useMutation({
-    mutationFn: (id: string) => post<{ org: { id: string } }>(`/me/invitations/${id}/accept`),
-    onSuccess: async ({ org }) => {
-      await queryClient.invalidateQueries({ queryKey: ['me'] });
-      await navigate({ to: '/app/orgs/$orgId', params: { orgId: org.id } });
-    },
-  });
-
   function onSubmit(event: FormEvent) {
     event.preventDefault();
     const parsed = createOrgInput.safeParse({ name });
@@ -50,52 +45,17 @@ export function NewOrgPage() {
     create.mutate(parsed.data);
   }
 
-  const invitations = me?.invitations ?? [];
   const firstOrg = (me?.memberships.length ?? 0) === 0;
   const onlyAdminsCreate = instance?.signupMode === 'invite' && !me?.user.isPlatformAdmin;
 
   return (
     <>
       <PageHeader
-        title={firstOrg ? 'Welcome to credforge' : 'New organization'}
+        title={firstOrg ? 'Create an organization' : 'New organization'}
         description="An organization is your team’s home on credforge. It owns your issuer profile, achievements and awards."
       />
 
-      {invitations.length > 0 && (
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle>You’re invited</CardTitle>
-            <CardDescription>Join an organization that invited {me?.user.email}.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            {accept.isError && <Alert variant="error">{errorMessage(accept.error)}</Alert>}
-            {invitations.map((invitation) => (
-              <div
-                key={invitation.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4"
-              >
-                <div className="flex items-start gap-3">
-                  <Mail className="mt-0.5 size-4 text-link" aria-hidden="true" />
-                  <div>
-                    <p className="font-semibold">{invitation.org.name}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {ROLE_LABELS[invitation.role]}
-                      {invitation.invitedByName && ` · invited by ${invitation.invitedByName}`} ·
-                      expires {formatDate(invitation.expiresAt)}
-                    </p>
-                  </div>
-                </div>
-                <Button
-                  onClick={() => accept.mutate(invitation.id)}
-                  pending={accept.isPending && accept.variables === invitation.id}
-                >
-                  Join
-                </Button>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+      {me && <InvitationsCard me={me} className="mb-6" />}
 
       {onlyAdminsCreate ? (
         <Alert variant="info" title="Organizations are created by invitation">

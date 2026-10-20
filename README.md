@@ -8,8 +8,9 @@
 > public badge pages) and M4 (awarding many from a CSV file, revoking and reissuing, the
 > verification tool, search and exports) are done. M5's hardening is done (API keys and API docs,
 > rate limits, abuse reports, domain verification, security headers, the landing page, draft
-> privacy policy and terms, encrypted nightly backups with a tested restore), and an organization
-> can erase a recipient's data on request; deploying to credforge.app is next. See the
+> privacy policy and terms, encrypted nightly backups with a tested restore), an organization
+> can erase a recipient's data on request, and recipients can sign in to see all their badges in
+> one place (**My badges**); deploying to credforge.app is next. See the
 > [design plan](docs/design-plan.md) for the architecture and the roadmap.
 
 ## Requirements
@@ -69,6 +70,22 @@ And M5:
   files, and makes what the audit log says about the person unreadable. The badge's address then
   answers 410 Gone; copies of it check as revoked. See the design plan, §12.1.
 
+And **My badges** for recipients (design plan §8.8):
+
+- Create an account with an address that was awarded a badge (or sign in with Google, or with
+  Microsoft when it vouches for the address). People who aren't members of an organization land on
+  **My badges** (`/app/badges`), which lists every badge awarded to that address by any
+  organization: open its page, download the baked PNG/SVG or the JSON, add it to LinkedIn, and
+  hide or show its page. Revoked, replaced and expired badges are marked; erased ones never show.
+  Creating an organization is one step away (**Award badges yourself**, or **New organization**).
+- Only confirmed addresses count: the account's own once it is verified, and extra addresses
+  added under **Account settings → Email addresses for My badges**, each confirmed through a link
+  emailed to it and opened while signed in (up to five; they never sign you in).
+- Signed in with the badge's address, its public page treats you as its recipient, as the claim
+  link does; the claim page and the landing page invite recipients to create an account.
+- The API is `GET /api/v1/me/credentials`, `GET/PATCH /api/v1/me/credentials/{id}` and
+  `/api/v1/me/emails`; a person signed in only, never an API key.
+
 No configuration is needed for development. To override a default (for example to try Google or
 Microsoft sign-in with development OAuth clients), copy `.env.development.example` to
 `.env.development`.
@@ -107,7 +124,10 @@ with an API key), and every JSON response from `/api/v1` in every test is checke
 schema in the OpenAPI document; another test fails if a route is missing from the document. Domain
 verification uses a stand-in for DNS and HTTPS lookups. Erasing a recipient is checked end to end
 in the database: nothing about the person is left in badges, emails, queued email jobs, CSV rows,
-uploads or the audit log, while the badges stay revoked. Batches, revocation
+uploads or the audit log, while the badges stay revoked. My badges is tested for the
+verified-address rule (signing up with someone else's address, an unverified session, Google's
+`email_verified` and Microsoft's `xms_edov`), isolation between people and from API keys, extra
+addresses and their links, and invite-only instances. Batches, revocation
 and the worker's jobs are tested by running the job functions directly against the test database;
 verification of other issuers' credentials uses a stand-in fetcher that serves the
 `packages/ob3` sample issuer.
@@ -134,7 +154,9 @@ key (shown once), use it without cookies, revoke it, open the website verificati
 and check the landing page, the draft privacy policy and terms, the "Report a problem" link and the
 API docs (no CSP errors). The erasure test sets up an organization of its own, reviews what erasing
 a recipient would cover, confirms it, and checks the erased badge's screen and its public page
-(410).
+(410). The My badges tests award badges to a new recipient-only account (which lands on My badges),
+hide and show a badge's page, add and confirm an extra address from its Mailpit link, and check the
+empty list, Account settings and the public page as its signed-in recipient.
 Any violation fails the test. It also checks keyboard behaviour that broke before: the mobile menu
 takes focus, keeps Tab inside it and returns focus on Escape, its organization switcher is
 labelled, cancelling a confirm button returns focus to it, and step changes move focus to the new

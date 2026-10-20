@@ -65,6 +65,7 @@ export type ProblemCode =
   | 'rate_limited'
   | 'api_key_not_allowed'
   | 'no_website'
+  | 'email_confirmation_invalid'
   | 'internal_error';
 
 export interface Problem {
@@ -594,6 +595,30 @@ export const auditEventsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
+// ---- recipients: My badges (design plan §8.8) ----
+
+export const recipientCredentialsQuery = z.object({
+  /** Cursor: the `next` value from the previous page. */
+  before: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+/** The recipient hides their badge's public page, or makes it public again. */
+export const updateRecipientCredentialInput = z.object({
+  visibility: z.enum(['public', 'hidden'], { error: 'Choose public or hidden' }),
+});
+export type UpdateRecipientCredentialInput = z.input<typeof updateRecipientCredentialInput>;
+
+/** More addresses one person receives badges at, besides the account's own (decision 52). */
+export const MAX_EXTRA_EMAILS = 5;
+
+export const addEmailInput = z.object({ email: emailField });
+export type AddEmailInput = z.input<typeof addEmailInput>;
+
+/** The token from the confirmation link emailed to the address. */
+export const confirmEmailInput = z.object({ token: z.string().trim().min(1).max(200) });
+export type ConfirmEmailInput = z.input<typeof confirmEmailInput>;
+
 // ---- responses ----
 
 export interface InstanceInfo {
@@ -1094,4 +1119,65 @@ export interface AuditEventPage {
   events: AuditEvent[];
   /** Pass as `before` to get the next (older) page; null on the last page. */
   next: number | null;
+}
+
+/** What a recipient (and anyone else) may know about a revocation: never the internal reason. */
+export interface PublicRevocation {
+  /** `superseded` when a corrected copy replaced it. */
+  kind: 'revoked' | 'superseded';
+  at: string;
+  /** The reason the issuer chose to show publicly, if any. */
+  publicReason: string | null;
+}
+
+/**
+ * One of the signed-in person's badges in My badges (design plan §8.8): a credential awarded to
+ * one of their confirmed addresses, by any organization. What it says comes from the signed
+ * credential, as on its public page.
+ */
+export interface RecipientCredential {
+  id: string;
+  /** The badge's permanent public page. */
+  url: string;
+  achievement: {
+    id: string;
+    url: string;
+    name: string;
+    description: string;
+    /** The 512 px badge image it was awarded with. */
+    image: string | null;
+  };
+  issuer: { id: string; url: string; name: string; logo: string | null };
+  /** The name and address it was awarded to. */
+  recipient: { name: string; email: string };
+  /** From the status and the dates: valid, not valid yet, expired or revoked. */
+  state: CredentialState;
+  validFrom: string;
+  validUntil: string | null;
+  revocation: PublicRevocation | null;
+  /** `hidden`: its page answers "not found" to everyone but its recipient. */
+  visibility: 'public' | 'hidden';
+  downloads: { png: string; svg: string | null; json: string; certificate: string };
+  /** LinkedIn's "Add license or certification" form, filled in. */
+  linkedInUrl: string;
+  createdAt: string;
+}
+
+export interface RecipientCredentialPage {
+  credentials: RecipientCredential[];
+  /** Pass as `before` for the next (older) page; null on the last page. */
+  next: string | null;
+  /** The confirmed addresses matched: the account's own, then its confirmed extra addresses. */
+  addresses: string[];
+}
+
+/** An extra address on the account (decision 52). It is never a way to sign in. */
+export interface AccountEmail {
+  id: string;
+  email: string;
+  /** When it was confirmed; null while its confirmation link hasn't been opened. */
+  verifiedAt: string | null;
+  /** When the latest confirmation link was sent. */
+  sentAt: string | null;
+  createdAt: string;
 }

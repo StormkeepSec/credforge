@@ -98,6 +98,22 @@ export function existingAccountMessage(to: string, name: string, signInUrl: stri
   });
 }
 
+/**
+ * Confirms an extra address for My badges (decision 52). Nothing in it comes from the account
+ * (not even its name), so the form can't be used to send someone else's words to any address.
+ */
+export function confirmAddressMessage(to: string, url: string): EmailMessage {
+  return render('confirm-address', to, 'Confirm this address for your badges on credforge', {
+    paragraphs: [
+      `Someone signed in to credforge asked to add ${to} to their account, so that badges awarded to this address show in their list of badges.`,
+      'If that was you, open the link while signed in to that account. The address won’t become a way to sign in.',
+    ],
+    action: { label: 'Confirm this address', url },
+    footnote:
+      "The link works for 24 hours. If you didn't ask for this, ignore this email: nothing changes unless the link is opened while signed in to the account that asked.",
+  });
+}
+
 export function invitationMessage(input: {
   to: string;
   orgName: string;

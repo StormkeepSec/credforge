@@ -10,6 +10,7 @@ export const LINKS = {
   verifyEmail: '/api/auth/verify-email?token=',
   resetPassword: '/reset-password?token=',
   invitation: '/invite/',
+  confirmAddress: '/confirm-email?token=',
 } as const;
 
 async function getJson<T>(path: string): Promise<T> {

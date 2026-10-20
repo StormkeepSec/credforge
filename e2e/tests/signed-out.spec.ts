@@ -21,7 +21,7 @@ test('sign up: the form, its validation errors, and confirming the email', async
 
   const email = freshEmail('signup');
   await page.getByLabel('Your name').fill('E2E Sign-up');
-  await page.getByLabel('Work email').fill(email);
+  await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password', { exact: true }).fill(fixtures().password);
   await page.getByRole('button', { name: 'Create account' }).click();
   // The form is replaced by the next step: focus goes to its heading, not back to <body>.

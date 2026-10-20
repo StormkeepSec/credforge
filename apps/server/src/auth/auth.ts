@@ -1,10 +1,7 @@
 import {
   account,
-  and,
   type Database,
   eq,
-  gt,
-  invitation,
   session,
   twoFactor as twoFactorTable,
   user,
@@ -23,6 +20,7 @@ import {
   verifyEmailMessage,
 } from '../email/messages';
 import type { EmailOutbox } from '../email/outbox';
+import { mayCreateAccountByInvitation } from '../recipients/addresses';
 import { isMicrosoftEmailVerified, stripProviderTokens } from './providers';
 
 /** Set by the Fastify bridge from `request.ip` (which honors TRUST_PROXY); clients can't set it. */
@@ -181,25 +179,18 @@ export function createAuth({ config, db, outbox, log }: AuthDependencies) {
       additionalFields: {
         isPlatformAdmin: { type: 'boolean', required: false, defaultValue: false, input: false },
       },
-      /** SIGNUP_MODE=invite: only people with a pending invitation can create an account. */
+      /**
+       * SIGNUP_MODE=invite: only people with a pending invitation, or who were awarded a badge
+       * here (to see it in My badges), can create an account (decision 53).
+       */
       validateUserInfo: async ({ user: incoming, source }) => {
         if (config.signupMode !== 'invite' || source.action !== 'create-user') return;
-        const email = typeof incoming.email === 'string' ? incoming.email.toLowerCase() : '';
-        const [pending] = await db
-          .select({ id: invitation.id })
-          .from(invitation)
-          .where(
-            and(
-              eq(invitation.email, email),
-              eq(invitation.status, 'pending'),
-              gt(invitation.expiresAt, new Date()),
-            ),
-          )
-          .limit(1);
-        if (!pending) {
+        const email = typeof incoming.email === 'string' ? incoming.email : '';
+        if (!(await mayCreateAccountByInvitation(db, email))) {
           return {
             error: 'signup_closed',
-            errorDescription: 'This credforge instance only accepts new accounts by invitation.',
+            errorDescription:
+              'This credforge instance only accepts new accounts from people who were invited or awarded a badge here.',
           };
         }
       },

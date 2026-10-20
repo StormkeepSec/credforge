@@ -17,6 +17,7 @@ export const SPA_ROUTES = [
   '/forgot-password',
   '/reset-password',
   '/verify-email',
+  '/confirm-email',
   '/two-factor',
   '/invite/*',
 ];

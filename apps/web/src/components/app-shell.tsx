@@ -9,6 +9,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  Medal,
   Menu,
   Plus,
   Send,
@@ -118,6 +119,12 @@ function Sidebar({
       <div className="grid flex-1 content-start gap-4">
         {currentOrg && <OrgNav orgId={currentOrg.org.id} onNavigate={onNavigate} />}
         <ul className="grid gap-1">
+          <li>
+            <Link to="/app/badges" className={navLink} onClick={onNavigate}>
+              <Medal aria-hidden="true" />
+              My badges
+            </Link>
+          </li>
           <li>
             <Link to="/app/orgs/new" className={navLink} onClick={onNavigate}>
               <Plus aria-hidden="true" />

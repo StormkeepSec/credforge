@@ -1,4 +1,5 @@
 import type {
+  AccountEmail,
   Achievement,
   AchievementStatus,
   ApiKey,
@@ -20,6 +21,7 @@ import type {
   PlatformOrg,
   Problem,
   ProblemCode,
+  RecipientCredentialPage,
 } from '@credforge/contracts';
 import { queryOptions } from '@tanstack/react-query';
 
@@ -167,6 +169,12 @@ export const queries = {
       queryKey: ['org', orgId, 'api-keys'],
       queryFn: () => api<{ apiKeys: ApiKey[] }>(`/orgs/${orgId}/api-keys`),
     }),
+  /** Extra addresses for My badges (design plan §8.8). */
+  accountEmails: () =>
+    queryOptions({
+      queryKey: ['me', 'emails'],
+      queryFn: () => api<{ emails: AccountEmail[] }>('/me/emails'),
+    }),
   platformOrgs: (status: OrgStatus | 'all') =>
     queryOptions({
       queryKey: ['platform', 'orgs', status],
@@ -184,6 +192,13 @@ export async function fetchCredentialPage(
 ) {
   const query = filterQuery({ ...filters, ...(before && { before }) } as CredentialFilters);
   return api<CredentialPage>(`/orgs/${orgId}/credentials${query}`);
+}
+
+/** One page of My badges: the signed-in person's own badges, newest first. */
+export async function fetchMyCredentials(before?: string) {
+  return api<RecipientCredentialPage>(
+    `/me/credentials${before ? `?before=${encodeURIComponent(before)}` : ''}`,
+  );
 }
 
 export async function fetchAuditPage(orgId: string, before?: number) {

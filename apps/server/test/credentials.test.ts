@@ -7,7 +7,7 @@ import {
   resolveValidFrom,
   resolveValidUntil,
 } from '../src/credentials/service';
-import { linkedInUrl } from '../src/public/credential-routes';
+import { linkedInUrl } from '../src/public/credential-view';
 import type { CredentialView } from '../src/public/pages/credential';
 
 const now = new Date('2026-10-14T12:00:00Z');

@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import type {
+  AccountEmail,
   Achievement,
   AchievementRevision,
   ApiKey,
@@ -28,6 +29,8 @@ import type {
   OrgDetails,
   PlatformOrg,
   Problem,
+  RecipientCredential,
+  RecipientCredentialPage,
   RecipientErasurePreview,
   RecipientErasureResult,
   VerifyResult,
@@ -574,6 +577,68 @@ export const createdApiKeySchema = z
   .object({ ...apiKeyShape, key: z.string().describe('The whole key. Shown only this once.') })
   .meta({ id: 'CreatedApiKey' });
 
+export const recipientCredentialSchema = z
+  .object({
+    id: z.uuid(),
+    url: z.string().describe('The badge’s permanent public page'),
+    achievement: z.object({
+      id: z.uuid(),
+      url: z.string(),
+      name: z.string(),
+      description: z.string(),
+      image: nullable(z.string()).describe('The 512 px badge image it was awarded with'),
+    }),
+    issuer: z.object({
+      id: z.uuid(),
+      url: z.string(),
+      name: z.string(),
+      logo: nullable(z.string()),
+    }),
+    recipient: z
+      .object({ name: z.string(), email: z.string() })
+      .describe('The name and address it was awarded to'),
+    state: z.enum(['valid', 'not_yet_valid', 'expired', 'revoked']),
+    validFrom: dateTime,
+    validUntil: nullable(dateTime),
+    revocation: nullable(
+      z.object({
+        kind: z.enum(['revoked', 'superseded']),
+        at: dateTime,
+        publicReason: nullable(z.string()),
+      }),
+    ).describe('Never the issuer’s internal reason'),
+    visibility: z.enum(['public', 'hidden']),
+    downloads: z.object({
+      png: z.string(),
+      svg: nullable(z.string()),
+      json: z.string(),
+      certificate: z.string(),
+    }),
+    linkedInUrl: z.string(),
+    createdAt: dateTime,
+  })
+  .meta({ id: 'RecipientCredential' });
+
+export const recipientCredentialPageSchema = z
+  .object({
+    credentials: z.array(recipientCredentialSchema),
+    next: nullable(z.string()),
+    addresses: z
+      .array(z.string())
+      .describe('The confirmed addresses matched: the account’s own, then its confirmed extras'),
+  })
+  .meta({ id: 'RecipientCredentialPage' });
+
+export const accountEmailSchema = z
+  .object({
+    id: z.uuid(),
+    email: z.string(),
+    verifiedAt: nullable(dateTime).describe('Null until its confirmation link is opened'),
+    sentAt: nullable(dateTime),
+    createdAt: dateTime,
+  })
+  .meta({ id: 'AccountEmail' });
+
 // ---- compile-time checks: each schema describes exactly its response type ----
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -606,6 +671,9 @@ const checks: {
   audit: Same<Out<typeof auditEventPageSchema>, AuditEventPage>;
   apiKey: Same<Out<typeof apiKeySchema>, ApiKey>;
   createdApiKey: Same<Out<typeof createdApiKeySchema>, CreatedApiKey>;
+  recipientCredential: Same<Out<typeof recipientCredentialSchema>, RecipientCredential>;
+  recipientPage: Same<Out<typeof recipientCredentialPageSchema>, RecipientCredentialPage>;
+  accountEmail: Same<Out<typeof accountEmailSchema>, AccountEmail>;
 } = {
   problem: true,
   instance: true,
@@ -633,5 +701,8 @@ const checks: {
   audit: true,
   apiKey: true,
   createdApiKey: true,
+  recipientCredential: true,
+  recipientPage: true,
+  accountEmail: true,
 };
 void checks;

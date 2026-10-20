@@ -73,7 +73,7 @@ export function SignupPage({ search }: { search: { redirect?: string; email?: st
   return (
     <AuthLayout
       title="Create your account"
-      description="Then name your organization and set up how your badges are signed."
+      description="Keep every badge awarded to your email address in one place, or set up your organization to award badges."
       footer={
         <>
           Already have an account?{' '}
@@ -89,9 +89,9 @@ export function SignupPage({ search }: { search: { redirect?: string; email?: st
     >
       <div className="grid gap-5">
         {instance?.signupMode === 'invite' && (
-          <Alert variant="info" title="Invitation needed">
-            New accounts on this credforge site are by invitation only. Use the address your
-            invitation was sent to.
+          <Alert variant="info" title="For invited people and badge recipients">
+            New accounts on this credforge site are for people who were invited or awarded a badge
+            here. Use the address your invitation or badge was sent to.
           </Alert>
         )}
         {error && <Alert variant="error">{error}</Alert>}
@@ -107,7 +107,11 @@ export function SignupPage({ search }: { search: { redirect?: string; email?: st
               />
             )}
           </Field>
-          <Field label="Work email" error={errors.email}>
+          <Field
+            label="Email"
+            description="Received a badge? Use the address it was sent to."
+            error={errors.email}
+          >
             {(props) => (
               <Input
                 {...props}

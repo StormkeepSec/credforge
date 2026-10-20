@@ -50,6 +50,13 @@
       "when": 1792115856226,
       "tag": "0006_recipient_erasure",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792517026499,
+      "tag": "0007_recipient_accounts",
+      "breakpoints": true
     }
   ]
 }

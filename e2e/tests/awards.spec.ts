@@ -3,7 +3,7 @@ import { type APIRequestContext, expect, test } from '@playwright/test';
 import { BADGE_SVG } from '../support/accounts';
 import { expectScreen, openScreen } from '../support/app';
 import { expectAccessible } from '../support/axe';
-import { fixtures, SIGNED_IN, testEmail } from '../support/fixtures';
+import { fixtures, SIGNED_IN, SIGNED_OUT, testEmail } from '../support/fixtures';
 import { mailLink } from '../support/mailpit';
 import { BASE_URL } from '../support/stack';
 
@@ -81,16 +81,19 @@ test.describe('as an organization owner', () => {
     await expect(page.getByRole('heading', { name: 'Awarded to E2E Owner' })).toBeFocused();
     await expectAccessible(page, 'awarded');
 
-    // The recipient opens the link from their email, without an account.
+    // The recipient opens the link from their email, without an account (signed out: signed in
+    // with the badge's address would make them its recipient anyway).
     const { owner } = fixtures();
     const link = await mailLink(owner.email, '?t=');
-    const recipient = await browser.newContext();
+    const recipient = await browser.newContext({ storageState: SIGNED_OUT });
     const view = await recipient.newPage();
     try {
       await view.goto(link);
       await expect(view).toHaveURL(/\/credentials\/[0-9a-f-]+$/); // the token left the address bar
       await expect(view.getByRole('heading', { level: 1, name: achievement.name })).toBeVisible();
       await expect(view.getByRole('heading', { name: 'This is your badge' })).toBeVisible();
+      // Signed out with the claim link: an invitation to keep all their badges in one place.
+      await expect(view.getByRole('link', { name: 'create a free account' })).toBeVisible();
       await expect(
         view.getByText('Signature checked with a key published by the issuer'),
       ).toBeVisible();
@@ -121,7 +124,7 @@ test.describe('as an organization owner', () => {
       await view.goto(credentialUrl);
       await view.getByRole('button', { name: 'Hide the page' }).click();
       await expect(view.getByRole('button', { name: 'Make the page public' })).toBeVisible();
-      const stranger = await browser.newContext();
+      const stranger = await browser.newContext({ storageState: SIGNED_OUT });
       try {
         const response = await (await stranger.newPage()).goto(credentialUrl);
         expect(response?.status()).toBe(404);

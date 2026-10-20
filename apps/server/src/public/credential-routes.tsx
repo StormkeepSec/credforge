@@ -10,7 +10,6 @@ import { isSameOrigin } from '../api/v1';
 import { recordAudit } from '../audit/audit';
 import {
   type CredentialRow,
-  credentialState,
   credentialUrl,
   hashClaimToken,
   isValidClaimToken,
@@ -18,15 +17,24 @@ import {
 import { type FileRow, imageSet, loadFiles } from '../files/service';
 import { verifiedHost } from '../issuers/domain';
 import { issuerUrl } from '../issuers/service';
+import { type AccountView, accountView } from '../recipients/ownership';
+import { changeVisibility, recipientActing } from '../recipients/service';
 import type { Services } from '../services';
 import { verifyLocalCredential } from '../verify/local';
 import type { PublicAssets } from './assets';
+import {
+  asRecord,
+  asString,
+  credentialView,
+  type LiveCredentialRow,
+  linkedInUrl,
+} from './credential-view';
 import { renderDocument } from './document';
 import { UPLOAD_CSP } from './image-routes';
 import { negotiate } from './negotiate';
 import { AchievementPage } from './pages/achievement';
 import { CertificatePage } from './pages/certificate';
-import { CredentialPage, type CredentialView } from './pages/credential';
+import { CredentialPage } from './pages/credential';
 import { ErasedCredentialPage } from './pages/erased';
 import { TooManyRequestsPage } from './pages/too-many';
 
@@ -69,90 +77,6 @@ function slug(text: string): string {
   );
 }
 
-type Json = Record<string, unknown>;
-const asRecord = (value: unknown): Json =>
-  value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {};
-const asString = (value: unknown): string | undefined =>
-  typeof value === 'string' ? value : undefined;
-const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
-
-/** A credential that still has its signed document (its recipient wasn't erased). */
-type LiveCredentialRow = CredentialRow & { document: Record<string, unknown> };
-
-/** What the page shows, from the signed document: the credential as it was issued. */
-function credentialView(
-  publicBaseUrl: string,
-  row: LiveCredentialRow,
-  image: FileRow | undefined,
-): CredentialView {
-  const doc = row.document;
-  const subject = asRecord(doc.credentialSubject);
-  const a = asRecord(subject.achievement);
-  const criteria = asRecord(a.criteria);
-  const issuerDoc = asRecord(doc.issuer);
-  const recipientName = asArray(subject.identifier)
-    .map(asRecord)
-    .find(
-      (identifier) => identifier.identityType === 'name' && identifier.hashed === false,
-    )?.identityHash;
-  const id = row.id;
-  const base = credentialUrl(publicBaseUrl, id);
-  const images = image ? imageSet(publicBaseUrl, image) : null;
-  const name = asString(a.name) ?? 'Badge';
-  return {
-    achievement: {
-      url: asString(a.id) ?? achievementUrl(publicBaseUrl, row.achievementId),
-      name,
-      description: asString(a.description) ?? '',
-      typeLabel: achievementTypeLabel(asString(a.achievementType) ?? 'Badge'),
-      criteriaNarrative: asString(criteria.narrative) ?? null,
-      criteriaUrl: asString(criteria.id) ?? null,
-      tags: asArray(a.tag).filter((tag): tag is string => typeof tag === 'string'),
-      alignments: asArray(a.alignment)
-        .map(asRecord)
-        .filter((alignment) => asString(alignment.targetName) && asString(alignment.targetUrl))
-        .map((alignment) => ({
-          targetName: alignment.targetName as string,
-          targetUrl: alignment.targetUrl as string,
-          ...(asString(alignment.targetFramework) && {
-            targetFramework: alignment.targetFramework as string,
-          }),
-          ...(asString(alignment.targetCode) && { targetCode: alignment.targetCode as string }),
-        })),
-    },
-    image: images ? { url: images.url512, alt: `${name} badge` } : null,
-    ogImage: images?.ogUrl ? { url: images.ogUrl, width: 1200, height: 630 } : null,
-    recipientName: typeof recipientName === 'string' ? recipientName : null,
-    issuer: {
-      name: asString(issuerDoc.name) ?? 'Issuer',
-      pageUrl: asString(issuerDoc.id) ?? issuerUrl(publicBaseUrl, row.issuerId),
-      website: asString(issuerDoc.url) ?? null,
-      logoUrl: asString(asRecord(issuerDoc.image).id) ?? null,
-    },
-    validFrom: row.validFrom,
-    validUntil: row.validUntil,
-    state: credentialState(row),
-    revokedAt: row.revokedAt,
-    revocation:
-      row.status === 'revoked'
-        ? { kind: row.revocationKind ?? 'revoked', publicReason: row.revocationPublicReason }
-        : null,
-    evidence: asArray(doc.evidence)
-      .map(asRecord)
-      .map((item) => ({
-        ...(asString(item.id) && { url: item.id as string }),
-        ...(asString(item.name) && { name: item.name as string }),
-        ...(asString(item.narrative) && { narrative: item.narrative as string }),
-      })),
-    downloads: {
-      png: `${base}/badge.png`,
-      svg: image?.mimeType === 'image/svg+xml' ? `${base}/badge.svg` : null,
-      json: `${base}/credential.json`,
-      certificate: `${base}/certificate`,
-    },
-  };
-}
-
 /**
  * Between a revocation and the worker re-signing the status list (a few seconds), the published
  * list still has the old bit. The page says what the issuer did rather than what the list says.
@@ -178,47 +102,13 @@ export function withRevocation(
 }
 
 /**
- * The recipient acting through their claim link: their name, IP address and browser go into the
- * event's sealed recipient details (design plan §12.1), not its plain columns.
- */
-function recipientActing(row: CredentialRow, request: FastifyRequest) {
-  return row.auditKey
-    ? {
-        recipient: {
-          key: row.auditKey,
-          actorLabel: row.recipientName,
-          ip: request.ip,
-          userAgent: request.headers['user-agent'] ?? null,
-        },
-      }
-    : {};
-}
-
-/** LinkedIn's "add a license or certification" link (design plan §5.3). */
-export function linkedInUrl(view: CredentialView, url: string, id: string): string {
-  const params = new URLSearchParams({
-    startTask: 'CERTIFICATION_NAME',
-    name: view.achievement.name,
-    organizationName: view.issuer.name,
-    issueYear: String(view.validFrom.getUTCFullYear()),
-    issueMonth: String(view.validFrom.getUTCMonth() + 1),
-    certUrl: url,
-    certId: id,
-  });
-  if (view.validUntil) {
-    params.set('expirationYear', String(view.validUntil.getUTCFullYear()));
-    params.set('expirationMonth', String(view.validUntil.getUTCMonth() + 1));
-  }
-  return `https://www.linkedin.com/profile/add?${params}`;
-}
-
-/**
  * The public side of credentials, achievements and status lists (design plan §5.2, §8.4, §9).
  *
  * - `/credentials/:id`: the page (HTML) or the signed credential (JSON), by `Accept`. A claim
  *   link (`?t=`) is exchanged for an HttpOnly cookie scoped to this credential and the browser is
  *   sent to the clean URL, so the token doesn't stay in the address bar or get copied into a
- *   shared link. That cookie unlocks Add to LinkedIn and hiding the page.
+ *   shared link. That cookie unlocks Add to LinkedIn and hiding the page. So does being signed
+ *   in with the address the badge was awarded to (My badges, design plan §8.8).
  * - Downloads, baked on request: `badge.png`, `badge.svg` (SVG artwork only), `credential.json`,
  *   and the printable `certificate`.
  * - `/achievements/:id`: the achievement (HTML or OB `Achievement` JSON). Drafts aren't public.
@@ -227,11 +117,12 @@ export function linkedInUrl(view: CredentialView, url: string, id: string): stri
  *   ETag, open to every origin, and must never be rate limited.
  */
 export const publicCredentialRoutes: FastifyPluginAsync<{
-  services: Pick<Services, 'db' | 'config' | 'storage'>;
+  services: Pick<Services, 'db' | 'config' | 'storage' | 'auth'>;
   assets: PublicAssets;
   /** Claim links opened per client IP (tokens can't be guessed, but each costs a lookup). */
   claimLimiter: RateLimiter;
-}> = async (app, { services: { db, config, storage }, assets, claimLimiter }) => {
+}> = async (app, { services, assets, claimLimiter }) => {
+  const { db, config, storage } = services;
   const base = config.publicBaseUrl;
   const secureCookies = base.startsWith('https://');
 
@@ -247,8 +138,20 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
     return row;
   }
 
-  function isOwner(request: FastifyRequest, row: CredentialRow): boolean {
-    return isValidClaimToken(row, readCookie(request, CLAIM_COOKIE));
+  /**
+   * Whether the visitor is the badge's recipient: holding its claim link (the cookie), or signed
+   * in with the address it was awarded to.
+   */
+  async function recipientOf(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    row: CredentialRow,
+  ): Promise<{ owner: boolean; account: AccountView }> {
+    const account = await accountView(services, request, reply, row);
+    return {
+      owner: account === 'owner' || isValidClaimToken(row, readCookie(request, CLAIM_COOKIE)),
+      account,
+    };
   }
 
   function sendHtml(reply: FastifyReply, html: string) {
@@ -368,7 +271,7 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
       return reply.redirect(url, 303);
     }
 
-    const owner = isOwner(request, row);
+    const { owner, account } = await recipientOf(request, reply, row);
     reply.header('vary', 'Accept, Cookie');
     reply.header('x-robots-tag', 'noindex');
     const type = negotiate(request.headers.accept, DOCUMENT_OFFERS);
@@ -381,9 +284,10 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
     }
     // A hidden page answers like a missing one, except to its recipient.
     if (row.visibility === 'hidden' && !owner) return reply.callNotFound();
+    // A signed-in visitor's page can carry a refreshed session cookie: never cache it.
     reply.header(
       'cache-control',
-      row.visibility === 'hidden' || owner ? 'private, no-store' : 'public, max-age=60',
+      row.visibility === 'hidden' || owner || account ? 'private, no-store' : 'public, max-age=60',
     );
 
     if (type !== 'text/html') {
@@ -428,6 +332,7 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
                   visibility: row.visibility,
                   linkedInUrl: linkedInUrl(view, url, row.id),
                   visibilityAction: `/credentials/${row.id}/visibility`,
+                  account,
                 }
               : null
           }
@@ -447,29 +352,17 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
     if (!row) return reply.callNotFound();
     if (!row.document) return sendGone(request, reply, row);
     const url = credentialUrl(base, row.id);
-    if (!isSameOrigin(request, base) || !isOwner(request, row)) {
+    if (!isSameOrigin(request, base) || !(await recipientOf(request, reply, row)).owner) {
       return reply
         .code(403)
         .type('text/plain')
-        .send('Open your badge from the link in your email first.');
+        .send(
+          'Open your badge from the link in your email, or sign in with the address it was sent to, first.',
+        );
     }
     const wanted = (request.body as { visibility?: string } | undefined)?.visibility;
     if (wanted !== 'hidden' && wanted !== 'public') return reply.redirect(url, 303);
-    if (wanted !== row.visibility) {
-      await db.transaction(async (tx) => {
-        await tx
-          .update(credential)
-          .set({ visibility: wanted, updatedAt: new Date() })
-          .where(eq(credential.id, row.id));
-        await recordAudit(tx, {
-          orgId: row.orgId,
-          actor: { type: 'recipient' },
-          action: wanted === 'hidden' ? 'credential.hidden' : 'credential.shown',
-          target: { type: 'credential', id: row.id },
-          ...recipientActing(row, request),
-        });
-      });
-    }
+    await changeVisibility(db, row, wanted, request);
     return reply.redirect(url, 303);
   });
 
@@ -492,7 +385,7 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
       return null;
     }
     const row: LiveCredentialRow = { ...found, document: found.document };
-    const owner = isOwner(request, row);
+    const { owner, account } = await recipientOf(request, reply, row);
     if (row.visibility === 'hidden' && !owner) {
       await reply.callNotFound();
       return null;
@@ -501,7 +394,7 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
     reply.header('x-robots-tag', 'noindex');
     reply.header(
       'cache-control',
-      row.visibility === 'hidden' || owner ? 'private, no-store' : 'public, max-age=300',
+      row.visibility === 'hidden' || owner || account ? 'private, no-store' : 'public, max-age=300',
     );
     return row;
   }

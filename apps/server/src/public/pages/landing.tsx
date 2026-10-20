@@ -2,6 +2,7 @@ import type { SignupMode } from '@credforge/contracts';
 import { BrandMark } from '../components/brand-mark';
 import { SitePage } from '../components/site-chrome';
 import { Document } from '../document';
+import { MY_BADGES_PATH } from './credential';
 
 // Copy comes from branding/credforge-copy-kit.md and the brand guide (Messaging, Website
 // application). Keep every claim within the kit's language guardrails and true of the product:
@@ -61,7 +62,7 @@ const story = [
     step: '03',
     title: 'Carried',
     lead: 'Make recognition easier to share.',
-    body: 'Recipients get a link to their badge page, the badge image with the credential inside it, and a printable certificate. They can add it to LinkedIn or hide the page.',
+    body: 'Recipients get a link to their badge page, the badge image with the credential inside it, and a printable certificate. They can add it to LinkedIn, hide the page, or sign in to see all their badges together.',
   },
 ];
 
@@ -155,6 +156,35 @@ export function LandingPage({
           </div>
         </section>
 
+        <section aria-labelledby="recipients-heading" className="border-t border-ink/10 bg-white">
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-6 px-4 py-10 sm:px-6">
+            <div className="max-w-2xl">
+              <h2 id="recipients-heading" className="text-2xl font-bold tracking-tight">
+                Received a badge?
+              </h2>
+              <p className="mt-2 leading-relaxed text-ink-muted">
+                Keep every badge awarded to you in one place. Sign in or create a free account with
+                the address your badges were sent to: you’ll see them all, from every organization,
+                and can download them, add them to LinkedIn or hide their pages.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <a
+                href={`/login?redirect=${encodeURIComponent(MY_BADGES_PATH)}`}
+                className={`${cta} bg-ink text-canvas hover:bg-ink-muted focus-visible:outline-signal-strong`}
+              >
+                See my badges
+              </a>
+              <a
+                href={`/signup?redirect=${encodeURIComponent(MY_BADGES_PATH)}`}
+                className={`${cta} border border-ink/20 text-ink hover:border-ink focus-visible:outline-signal-strong`}
+              >
+                Create a free account
+              </a>
+            </div>
+          </div>
+        </section>
+
         <section aria-labelledby="ways-heading" className="border-t border-ink/10 bg-white">
           <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6">
             <h2 id="ways-heading" className="text-3xl font-bold tracking-tight">
@@ -230,8 +260,9 @@ export function LandingPage({
                 revoked, and its dates, on the badge’s page or with the verification tool.
               </p>
               <p className="mt-4 leading-relaxed text-ink-muted">
-                Recipients don’t need an account. Their email address appears in the credential only
-                as a salted hash.
+                Recipients don’t need an account: the emailed link is enough. With one, they see all
+                their badges together. Their email address appears in the credential only as a
+                salted hash.
               </p>
               <a
                 href="/verify"

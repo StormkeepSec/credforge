@@ -36,6 +36,13 @@ export const SIGNED_IN = {
   invitee: join(AUTH_DIR, 'invitee.json'),
 } as const;
 
+/**
+ * No cookies at all. Inside a `test.use({ storageState })` block, `browser.newContext()` takes the
+ * block's saved session too, so a visitor who must be signed out (a stranger, a recipient with
+ * only their claim link) needs this. Signed in with a badge's address is its recipient (§8.8).
+ */
+export const SIGNED_OUT = { cookies: [], origins: [] };
+
 export function newRunId(): string {
   return `${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
 }

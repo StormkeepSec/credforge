@@ -12,6 +12,7 @@ import { invitationRoutes, publicInvitationRoutes } from '../orgs/invitations';
 import { memberRoutes } from '../orgs/members';
 import { orgRoutes, userOrgRoutes } from '../orgs/routes';
 import { platformRoutes } from '../platform/routes';
+import { recipientRoutes } from '../recipients/routes';
 import type { Services } from '../services';
 import { type VerifyRouteOptions, verifyRoutes } from '../verify/routes';
 import { ApiError, problemErrorHandler } from './errors';
@@ -85,6 +86,8 @@ export const apiV1: FastifyPluginAsync<{
   });
 
   await app.register(meRoutes, { services });
+  // My badges: the person's own badges and addresses, whatever orgs they belong to (§8.8).
+  await app.register(recipientRoutes, { services });
   await app.register(userOrgRoutes, { services });
   await app.register(publicInvitationRoutes, { services, linkLimiter });
   await app.register(platformRoutes, { services, prefix: '/platform' });

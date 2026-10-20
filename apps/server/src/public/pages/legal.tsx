@@ -31,7 +31,7 @@ export interface LegalFacts {
   };
 }
 
-const LAST_UPDATED = '15 October 2026';
+const LAST_UPDATED = '20 October 2026';
 
 const link = 'font-semibold text-signal-strong underline underline-offset-4 hover:text-ink';
 
@@ -150,6 +150,10 @@ export function PrivacyPage({
             signed badge, the email address is only a salted hash.
           </li>
           <li>
+            Recipients don’t need an account. If they create one, it shows only the badges awarded
+            to email addresses they have confirmed are theirs.
+          </li>
+          <li>
             No advertising, no analytics, no tracking pixels. Emails are sent with click and open
             tracking turned off.
           </li>
@@ -195,6 +199,20 @@ export function PrivacyPage({
           search engines not to index them.
         </p>
         <p>
+          <strong>You don’t need an account.</strong> If you create one (or sign in) with the
+          address a badge was sent to, <strong>My badges</strong> lists every badge awarded to that
+          address on {facts.siteName}, by any organization, once the address is confirmed: by the
+          link in our confirmation email
+          {(p.google || p.microsoft) &&
+            `, or because ${[p.google && 'Google', p.microsoft && 'Microsoft'].filter(Boolean).join(' or ')} confirms it when you sign in with them`}
+          . An account whose address isn’t confirmed sees no badges. You can add other addresses you
+          receive badges at; each one is confirmed through a link we email to it, opened while
+          you’re signed in. From My badges you can open and download each badge, add it to LinkedIn,
+          and hide or show its page; hidden badges stay visible to you. We don’t tell the
+          organizations that awarded your badges that you have an account: when you hide or show a
+          page, their records say that the recipient did, as they do when you use the claim link.
+        </p>
+        <p>
           If something on a badge is wrong, contact the organization that awarded it: they can
           correct it (by reissuing it) or revoke it.
         </p>
@@ -221,6 +239,10 @@ export function PrivacyPage({
           <li>
             replaces each badge’s page with a notice that the badge was removed. Any copy of a badge
             (a downloaded file or badge image) still checks as revoked.
+          </li>
+          <li>
+            removes those badges from My badges. If you have an account, the account itself stays
+            until you ask us to delete it.
           </li>
         </ul>
         <p>
@@ -250,6 +272,11 @@ export function PrivacyPage({
               provider’s access tokens, so we can’t act on your account there.
             </li>
           )}
+          <li>
+            <strong>Other email addresses you add</strong> to see the badges sent to them, and when
+            each was confirmed. They are never used to sign in, and we email them only their
+            confirmation link. Adding, confirming and removing one is recorded with your account.
+          </li>
           <li>
             <strong>Two-step verification:</strong> your authenticator secret (encrypted) and backup
             codes.
@@ -287,8 +314,9 @@ export function PrivacyPage({
 
       <Section title="Cookies">
         <p>
-          Only the cookies the site needs: your session when you sign in, and a cookie that
-          remembers a badge’s claim link on that badge’s page. No advertising or analytics cookies.
+          Only the cookies the site needs: your session when you sign in (badge pages also use it to
+          recognize you as a badge’s recipient), and a cookie that remembers a badge’s claim link on
+          that badge’s page. No advertising or analytics cookies.
         </p>
       </Section>
 
@@ -345,7 +373,8 @@ export function PrivacyPage({
           </li>
           <li>
             <strong>Claim links</strong> stop working after 90 days (the organization can send a new
-            one). Invitations expire after 7 days.
+            one). Invitations expire after 7 days. Links confirming an address you add stop working
+            after 24 hours.
           </li>
           <li>
             <strong>Database backups</strong> are kept for 30 days. Restoring one applies again any
@@ -356,7 +385,8 @@ export function PrivacyPage({
             parts removed) are kept for <ToFill>how long</ToFill>.
           </li>
           <li>
-            <strong>Accounts</strong> are kept until you ask us to delete yours.{' '}
+            <strong>Accounts</strong>, and the addresses you added to them (until you remove them),
+            are kept until you ask us to delete yours.{' '}
             <ToFill>Decide how long the audit log is kept.</ToFill>
           </li>
         </ul>
@@ -433,7 +463,9 @@ export function TermsPage({
         <p>
           {facts.siteName} lets organizations create achievements and award them as signed Open
           Badges 3.0 credentials, email recipients their badges, publish a page for each badge, and
-          revoke badges. Anyone can check a badge’s signature, status and dates.
+          revoke badges. Anyone can check a badge’s signature, status and dates. People who receive
+          badges may create an account to see the badges awarded to the email addresses they have
+          confirmed.
         </p>
         <p>
           A badge says that the organization awarded it. {facts.siteName} doesn’t check whether the

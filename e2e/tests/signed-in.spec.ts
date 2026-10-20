@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { signUpAndConfirm } from '../support/accounts';
-import { openScreen } from '../support/app';
+import { expectScreen, openScreen } from '../support/app';
 import { expectAccessible } from '../support/axe';
 import { fixtures, SIGNED_IN, testEmail } from '../support/fixtures';
 import { totp } from '../support/totp';
@@ -53,9 +53,21 @@ test.describe('as someone with an invitation', () => {
 
   test('new organization, with the invitation to join', async ({ page }) => {
     const { org } = fixtures();
-    await openScreen(page, '/app/orgs/new', 'Welcome to credforge');
+    await openScreen(page, '/app/orgs/new', 'Create an organization');
     await expect(page.getByText(org.name)).toBeVisible();
     await expectAccessible(page, 'new organization');
+  });
+
+  test('starts at My badges, with the invitation to join', async ({ page }) => {
+    const { org } = fixtures();
+    // Not a member of anything yet: /app leads to their own badges, not to creating an org.
+    await page.goto('/app');
+    await expectScreen(page, 'My badges');
+    await expect(page.getByRole('heading', { name: 'You’re invited' })).toBeVisible();
+    await expect(page.getByText(org.name)).toBeVisible();
+    await expect(page.getByText('No badges yet')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Create an organization' })).toBeVisible();
+    await expectAccessible(page, 'my badges: none yet, with an invitation');
   });
 });
 

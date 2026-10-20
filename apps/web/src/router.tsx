@@ -26,9 +26,11 @@ import { AchievementEditorPage } from './pages/achievement-editor';
 import { AchievementsPage } from './pages/achievements';
 import { AwardPage } from './pages/award';
 import { AwardManyPage, BatchPage } from './pages/award-many';
+import { ConfirmEmailPage } from './pages/confirm-email';
 import { CredentialDetailPage, CredentialsPage } from './pages/credentials';
 import { InvitePage } from './pages/invite';
 import { LoginPage } from './pages/login';
+import { MyBadgesPage } from './pages/my-badges';
 import { NewOrgPage } from './pages/new-org';
 import { OrgApiKeysPage } from './pages/org-api-keys';
 import { OrgIssuerPage } from './pages/org-issuer';
@@ -125,6 +127,16 @@ const twoFactorRoute = createRoute({
   },
 });
 
+/** Where the link confirming an extra address lands (My badges, design plan §8.8). */
+const confirmEmailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/confirm-email',
+  validateSearch: z.object({ token: z.string().optional() }),
+  component: function ConfirmEmail() {
+    return <ConfirmEmailPage search={confirmEmailRoute.useSearch()} />;
+  },
+});
+
 const inviteRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/invite/$token',
@@ -174,7 +186,17 @@ const appIndexRoute = createRoute({
     if (first) throw redirect({ to: '/app/orgs/$orgId', params: { orgId: first.org.id } });
     // An instance operator without an org of their own starts at the approval queue.
     if (context.me.user.isPlatformAdmin) throw redirect({ to: '/app/platform' });
-    throw redirect({ to: '/app/orgs/new' });
+    // Everyone else starts at their own badges; creating an organization is one step away.
+    throw redirect({ to: '/app/badges' });
+  },
+});
+
+const myBadgesRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/badges',
+  component: function MyBadges() {
+    const { me } = appRoute.useRouteContext();
+    return <MyBadgesPage me={me} />;
   },
 });
 
@@ -364,9 +386,11 @@ const routeTree = rootRoute.addChildren([
   forgotPasswordRoute,
   resetPasswordRoute,
   twoFactorRoute,
+  confirmEmailRoute,
   inviteRoute,
   appRoute.addChildren([
     appIndexRoute,
+    myBadgesRoute,
     newOrgRoute,
     orgRoute.addChildren([
       orgOverviewRoute,

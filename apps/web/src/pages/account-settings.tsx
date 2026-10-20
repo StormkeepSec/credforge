@@ -1,7 +1,12 @@
-import type { SignInMethod } from '@credforge/contracts';
+import {
+  type AccountEmail,
+  addEmailInput,
+  MAX_EXTRA_EMAILS,
+  type SignInMethod,
+} from '@credforge/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { KeyRound, ShieldCheck, UserCog } from 'lucide-react';
+import { KeyRound, Mail, ShieldCheck, UserCog } from 'lucide-react';
 import { type FormEvent, type ReactNode, useState } from 'react';
 import { PageHeader } from '../components/app-shell';
 import { PROVIDER_ICONS } from '../components/auth-layout';
@@ -10,7 +15,7 @@ import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Alert, Badge, Spinner } from '../components/ui/feedback';
 import { Field, Input } from '../components/ui/input';
-import { queries } from '../lib/api';
+import { ApiError, del, errorMessage, post, queries } from '../lib/api';
 import {
   authClient,
   authErrorMessage,
@@ -18,6 +23,7 @@ import {
   PROVIDER_LABELS,
   type SocialProvider,
 } from '../lib/auth-client';
+import { formatDate, formatDateTime } from '../lib/utils';
 
 /** Wraps a Better Auth client call so React Query sees its error as a thrown error. */
 async function call<T>(
@@ -80,10 +86,10 @@ function MethodRow({
 }) {
   return (
     <li className="flex flex-wrap items-center justify-between gap-3 py-4">
-      <div className="flex items-center gap-3 [&_svg]:size-5">
+      <div className="flex min-w-0 items-center gap-3 [&_svg]:size-5 [&_svg]:shrink-0">
         {icon}
-        <div>
-          <p className="font-semibold">{label}</p>
+        <div className="min-w-0">
+          <p className="font-semibold break-all">{label}</p>
           <p className="text-sm text-muted-foreground">{status}</p>
         </div>
       </div>
@@ -206,6 +212,151 @@ function SignInMethodsCard({
             );
           })}
         </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Settings → Email addresses: more addresses whose badges show in My badges (design plan §8.8,
+ * decision 52). Each is confirmed through a link emailed to it; none of them signs you in.
+ */
+function EmailAddressesCard({ email }: { email: string }) {
+  const queryClient = useQueryClient();
+  const emails = useQuery(queries.accountEmails());
+  const [value, setValue] = useState('');
+  const [fieldError, setFieldError] = useState<string>();
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['me'] });
+
+  const add = useMutation({
+    mutationFn: (address: string) => post<AccountEmail>('/me/emails', { email: address }),
+    onSuccess: async (added) => {
+      setValue('');
+      setSentTo(added.email);
+      await refresh();
+    },
+    onError: (error) => {
+      if (error instanceof ApiError) setFieldError(error.fieldErrors.email);
+    },
+  });
+  const resend = useMutation({
+    mutationFn: (row: AccountEmail) => post<AccountEmail>(`/me/emails/${row.id}/resend`),
+    onSuccess: async (row) => {
+      setSentTo(row.email);
+      await refresh();
+    },
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => del(`/me/emails/${id}`),
+    onSuccess: async () => {
+      setSentTo(null);
+      await refresh();
+    },
+  });
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    const parsed = addEmailInput.safeParse({ email: value });
+    if (!parsed.success) {
+      setFieldError(parsed.error.issues[0]?.message);
+      return;
+    }
+    setFieldError(undefined);
+    add.mutate(parsed.data.email);
+  }
+
+  const rows = emails.data?.emails ?? [];
+  const failure = [add, resend, remove].find(
+    (mutation) => mutation.isError && !(mutation === add && fieldError),
+  )?.error;
+  return (
+    <Card id="email-addresses">
+      <CardHeader>
+        <CardTitle>Email addresses for My badges</CardTitle>
+        <CardDescription>
+          Badges awarded to any of these addresses show in My badges, once the address is confirmed.
+          Only {email} signs you in.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4 pt-2">
+        {failure && <Alert variant="error">{errorMessage(failure)}</Alert>}
+        {sentTo && (
+          <Alert variant="success" title={`We sent a link to ${sentTo}`}>
+            Open it while signed in to this account to confirm the address. It works for 24 hours.
+          </Alert>
+        )}
+        <ul className="divide-y">
+          <MethodRow
+            icon={<Mail aria-hidden="true" />}
+            label={email}
+            status={<Badge variant="success">Sign-in address, confirmed</Badge>}
+          />
+          {rows.map((row) => (
+            <MethodRow
+              key={row.id}
+              icon={<Mail aria-hidden="true" />}
+              label={row.email}
+              status={
+                row.verifiedAt ? (
+                  <Badge variant="success">Confirmed {formatDate(row.verifiedAt)}</Badge>
+                ) : (
+                  `Waiting for confirmation${row.sentAt ? `: link sent ${formatDateTime(row.sentAt)}` : ''}`
+                )
+              }
+              actions={
+                <>
+                  {!row.verifiedAt && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      pending={resend.isPending && resend.variables?.id === row.id}
+                      onClick={() => resend.mutate(row)}
+                    >
+                      Send the link again
+                    </Button>
+                  )}
+                  <ConfirmButton
+                    variant="outline"
+                    size="sm"
+                    question={`Remove ${row.email}? Its badges leave My badges.`}
+                    confirmLabel="Remove"
+                    pending={remove.isPending && remove.variables === row.id}
+                    onConfirm={() => remove.mutate(row.id)}
+                  >
+                    Remove
+                  </ConfirmButton>
+                </>
+              }
+            />
+          ))}
+        </ul>
+        {rows.length < MAX_EXTRA_EMAILS ? (
+          <form onSubmit={onSubmit} className="grid gap-4 sm:max-w-md" noValidate>
+            <Field
+              label="Add an address"
+              description="We’ll email it a link to confirm it’s yours."
+              error={fieldError}
+            >
+              {(props) => (
+                <Input
+                  {...props}
+                  type="email"
+                  autoComplete="email"
+                  value={value}
+                  onChange={(event) => setValue(event.target.value)}
+                />
+              )}
+            </Field>
+            <Button type="submit" pending={add.isPending} className="justify-self-start">
+              Send confirmation link
+            </Button>
+          </form>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            You can add up to {MAX_EXTRA_EMAILS} addresses. Remove one to add another.
+          </p>
+        )}
       </CardContent>
     </Card>
   );
@@ -388,6 +539,7 @@ export function AccountSettingsPage({ search }: { search: { error?: string } }) 
       <div className="grid gap-6">
         <ProfileCard name={me.user.name} email={me.user.email} />
         <SignInMethodsCard methods={me.signInMethods} email={me.user.email} error={search.error} />
+        <EmailAddressesCard email={me.user.email} />
         {hasPassword && <ChangePasswordCard />}
         <TwoFactorCard
           enabled={me.user.twoFactorEnabled}
