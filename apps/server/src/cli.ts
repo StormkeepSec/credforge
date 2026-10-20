@@ -4,6 +4,7 @@ import { and, createDatabase, credential, eq, organization, statusList, user } f
 import { z } from 'zod';
 import { recordAudit } from './audit/audit';
 import { createAuth } from './auth/auth';
+import { describeTwoFactorReset, resetTwoFactor } from './auth/two-factor-reset';
 import { loadConfigOrExit } from './config';
 import { eraseRecipient, previewErasure, reapplyErasures } from './credentials/erasure';
 import { revokeCredentials } from './credentials/revocation';
@@ -18,6 +19,7 @@ const USAGE = `credforge command line
 Usage:
   node dist/cli.js create-platform-admin --email <address> [--name <name>]
   node dist/cli.js remove-platform-admin --email <address>
+  node dist/cli.js reset-two-factor --email <address>
   node dist/cli.js publish-status-lists [--all]
   node dist/cli.js revoke-org-credentials --org <id> --reason <text> [--public-reason <text>] [--yes]
   node dist/cli.js erase-recipient --org <id> (--email <address> | --credential <id>) [--yes]
@@ -28,6 +30,11 @@ Commands:
                           Creates the account if it doesn't exist yet and prints a link to set
                           its password. Run it once to set up a new instance.
   remove-platform-admin   Take away a user's platform admin rights (the account stays).
+  reset-two-factor        Turn two-step verification off for someone who can't pass it (lost
+                          phone and backup codes): deletes the authenticator secret and backup
+                          codes, clears a lockout and ends their sessions. Owners, admins and
+                          platform admins set it up again at their next sign-in when
+                          REQUIRE_MFA_FOR_ADMINS=true. Confirm who is asking first.
   publish-status-lists    Re-sign and publish status lists with revocations not yet published
                           (the worker does this within seconds; use it if the worker was down).
                           --all re-signs every list.
@@ -167,6 +174,39 @@ async function removePlatformAdmin(args: string[]) {
       });
     });
     console.log(`${email} is no longer a platform admin.`);
+    return 0;
+  } finally {
+    await pool.end();
+  }
+}
+
+/** Design plan §6.4: the way back in after losing the second factor, audited unlike raw SQL. */
+async function resetTwoFactorCommand(args: string[]) {
+  const { values } = parseArgs({ args, options: { email: { type: 'string' } } });
+  const parsedEmail = emailField.safeParse(values.email ?? '');
+  if (!parsedEmail.success) {
+    console.error('Give a valid --email address.\n');
+    console.error(USAGE);
+    return 2;
+  }
+  const email = parsedEmail.data;
+  const config = loadConfigOrExit();
+  const { db, pool } = createDatabase(config.databaseUrl, {
+    applicationName: 'credforge-cli',
+    max: 2,
+  });
+  try {
+    const result = await resetTwoFactor(db, {
+      email,
+      requireMfaForAdmins: config.requireMfaForAdmins,
+      actor: CLI_ACTOR,
+    });
+    const report = describeTwoFactorReset(email, result);
+    if (result.outcome === 'no_account') {
+      console.error(report);
+      return 1;
+    }
+    console.log(report);
     return 0;
   } finally {
     await pool.end();
@@ -389,6 +429,8 @@ async function main(argv: string[]): Promise<number> {
       return createPlatformAdmin(rest);
     case 'remove-platform-admin':
       return removePlatformAdmin(rest);
+    case 'reset-two-factor':
+      return resetTwoFactorCommand(rest);
     case 'publish-status-lists':
       return publishStatusLists(rest);
     case 'revoke-org-credentials':

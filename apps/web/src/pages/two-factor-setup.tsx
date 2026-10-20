@@ -25,14 +25,22 @@ function secretFrom(uri: string): string {
   );
 }
 
-function downloadCodes(codes: string[]) {
+/** The entry's name in the app, with this site's host: "credforge (credforge.app)". */
+function issuerFrom(uri: string): string {
+  return new URL(uri).searchParams.get('issuer') ?? 'credforge';
+}
+
+function downloadCodes(codes: string[], email: string) {
+  // Backup codes work only on the site that issued them: say which one.
   const blob = new Blob(
-    [`credforge backup codes\nEach code works once.\n\n${codes.join('\n')}\n`],
+    [
+      `credforge backup codes for ${email} on ${window.location.origin}\nEach code works once.\n\n${codes.join('\n')}\n`,
+    ],
     { type: 'text/plain' },
   );
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
-  link.download = 'credforge-backup-codes.txt';
+  link.download = `credforge-backup-codes-${window.location.hostname}.txt`;
   link.click();
   URL.revokeObjectURL(link.href);
 }
@@ -176,6 +184,10 @@ export function TwoFactorSetupPage() {
                 <p className="font-semibold">Can’t scan it?</p>
                 <p className="text-muted-foreground">Enter this key in the app instead:</p>
                 <p className="mt-1 font-mono text-xs break-all">{secretFrom(step.uri)}</p>
+                <p className="mt-2 text-muted-foreground">
+                  Name the entry <span className="font-medium">{issuerFrom(step.uri)}</span> so you
+                  can tell it apart from other credforge sites.
+                </p>
               </div>
               <Field label="Code from the app">
                 {(props) => (
@@ -215,7 +227,10 @@ export function TwoFactorSetupPage() {
               ))}
             </ul>
             <div className="flex flex-wrap gap-3">
-              <Button variant="outline" onClick={() => downloadCodes(step.backupCodes)}>
+              <Button
+                variant="outline"
+                onClick={() => downloadCodes(step.backupCodes, me.user.email)}
+              >
                 <Download aria-hidden="true" />
                 Download
               </Button>

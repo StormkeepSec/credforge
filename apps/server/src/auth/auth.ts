@@ -45,6 +45,36 @@ export const AUTH_RATE_LIMITS: Record<string, { window: number; max: number }> =
   '/two-factor/disable': { window: 60, max: 10 },
 };
 
+/**
+ * The name authenticator apps give credforge's entry (the TOTP issuer): the instance's host in
+ * brackets, so an entry for credforge.app can't be mistaken for one from a development copy
+ * (decision 55). It is only written into new QR codes; existing entries keep their name and work.
+ */
+export function totpIssuer(publicBaseUrl: string): string {
+  const host = new URL(publicBaseUrl).hostname;
+  // The key URI's label is "issuer:account", so the issuer can't hold a colon (an IPv6 address).
+  if (!host || host.includes(':')) return 'credforge';
+  return `credforge (${host})`;
+}
+
+/**
+ * Puts `issuer` into a TOTP key URI from Better Auth, as both the label's prefix and the `issuer`
+ * parameter, percent-encoded (RFC 3986). Better Auth form-encodes the parameter (a space becomes
+ * `+`, which some authenticator apps show as is), `get-totp-uri` ignores the configured issuer and
+ * uses the app name, and `enable` takes one from the request body.
+ */
+export function totpUriWithIssuer(totpUri: string, issuer: string): string {
+  const url = new URL(totpUri);
+  const label = decodeURIComponent(url.pathname.slice(1));
+  const account = label.slice(label.indexOf(':') + 1);
+  const params = new URLSearchParams(url.search);
+  params.set('issuer', issuer);
+  const query = [...params]
+    .map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`)
+    .join('&');
+  return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(account)}?${query}`;
+}
+
 /** Passwords: NIST SP 800-63B allows 8+, credforge asks for a little more. */
 export const PASSWORD_MIN_LENGTH = 10;
 export const PASSWORD_MAX_LENGTH = 128;
@@ -93,6 +123,7 @@ function signInMethod(ctx: HookContext | null | undefined): string {
 
 export function createAuth({ config, db, outbox, log }: AuthDependencies) {
   const { publicBaseUrl } = config;
+  const issuer = totpIssuer(publicBaseUrl);
   const background = (promise: Promise<unknown>, what: string) => {
     promise.catch((err: unknown) => log.error({ err }, `${what} failed`));
   };
@@ -305,6 +336,12 @@ export function createAuth({ config, db, outbox, log }: AuthDependencies) {
         const created = hook.context.newSession;
 
         switch (hook.path) {
+          case '/two-factor/enable':
+          case '/two-factor/get-totp-uri': {
+            const body = returned as { totpURI?: unknown } | null | undefined;
+            if (typeof body?.totpURI !== 'string') return;
+            return ctx.json({ ...body, totpURI: totpUriWithIssuer(body.totpURI, issuer) });
+          }
           case '/two-factor/verify-totp':
           case '/two-factor/verify-backup-code': {
             // This session (new or existing) has now passed the second factor.
@@ -347,7 +384,7 @@ export function createAuth({ config, db, outbox, log }: AuthDependencies) {
 
     plugins: [
       twoFactor({
-        issuer: 'credforge',
+        issuer,
         // Accounts with only Google or Microsoft have no password to confirm with; those with a
         // password must still enter it.
         allowPasswordless: true,

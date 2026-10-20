@@ -77,7 +77,7 @@ export async function createTestEnvironment(
     extraSchemas: options.queue ? ['pgboss'] : [],
   });
 
-  const config = loadConfig({
+  const processEnv: Record<string, string> = {
     NODE_ENV: 'test',
     PUBLIC_BASE_URL: BASE_URL,
     DATABASE_URL: appUrl,
@@ -87,7 +87,8 @@ export async function createTestEnvironment(
     AUTH_SECRET: randomBytes(32).toString('hex'),
     STORAGE_LOCAL_DIR: mkdtempSync(join(tmpdir(), 'credforge-files-')),
     ...env,
-  });
+  };
+  const config = loadConfig(processEnv);
   const { db, pool } = createDatabase(appUrl, { max: 5 });
   const memory = createMemoryOutbox();
   if (options.queue) {
@@ -161,6 +162,8 @@ export async function createTestEnvironment(
     /** Every registered route (method and URL pattern). */
     routes,
     config,
+    /** The environment the config was loaded from, for running `cli.ts` against this database. */
+    processEnv,
     db,
     /** The owner connection, for setup that the app role can't do and for assertions. */
     ownerDb: owner.db,

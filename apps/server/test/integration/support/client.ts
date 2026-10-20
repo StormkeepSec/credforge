@@ -181,7 +181,7 @@ export function expectProblem(response: LightMyRequestResponse, status: number, 
 
 // ---- TOTP (RFC 6238), independent of Better Auth's implementation ----
 
-function base32Decode(input: string): Buffer {
+export function base32Decode(input: string): Buffer {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   let bits = 0;
   let value = 0;

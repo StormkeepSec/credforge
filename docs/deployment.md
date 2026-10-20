@@ -426,6 +426,10 @@ sudo certbot certificates
   `docker compose exec app node dist/cli.js erase-recipient --org <id> --email <address>` shows
   what it would erase, and `--yes` erases it (design plan §12.1). Each erasure leaves a small
   record under `erasures/` in the `credforge-prod` bucket: keep it, so restores re-apply erasures.
+- Someone who can't get past two-step verification (you included): see
+  [Lost access to two-step verification](#lost-access-to-two-step-verification) below. The last
+  resort is `docker compose exec app node dist/cli.js reset-two-factor --email <address>`, never
+  editing the database by hand.
 
 ## Troubleshooting
 
@@ -438,3 +442,50 @@ sudo certbot certificates
 | A 429 from nginx | Someone is hitting the flood guard; raise `burst` in the nginx file if it's legitimate |
 | Sign-in with Google or Microsoft fails | The redirect URI must match exactly (`https`, no trailing slash); `docker compose logs app` |
 | Certificate renewal fails | `sudo certbot renew --dry-run`; the port 80 server must still serve `/.well-known/acme-challenge/` from `/var/www/html` |
+| Two-step codes refused, or "too many failed verification attempts" | [Lost access to two-step verification](#lost-access-to-two-step-verification), next |
+
+### Lost access to two-step verification
+
+Go through these in order. Resetting is the last step, because it also removes the protection.
+
+1. **Locked out after wrong codes.** One sign-in accepts 5 wrong codes; after that, sign in with
+   the password again. After **10 wrong codes in a row** (across sign-ins, authenticator and
+   backup codes together) the account's two-step verification is **locked for 15 minutes**, even
+   for the right code. Wait 15 minutes; the lock clears itself, and the next right code resets the
+   count. Separately, each address may try 10 codes a minute (`AUTH_RATE_LIMIT`).
+2. **The right authenticator entry.** Entries added since decision 55 are named after the site,
+   `credforge (credforge.app)` (a development copy's are `credforge (localhost)`). Older ones are
+   all just `credforge`, so an entry from a development or test instance looks exactly like the
+   production one: try each `credforge` entry, then rename the one that works (most apps allow
+   it).
+3. **A backup code.** On the code screen choose **Use a backup code instead**. Each of the ten
+   codes saved when two-step verification was turned on works once, and only on the site that
+   issued them. Once in, make new ones under **Account settings → New backup codes**.
+4. **The clock.** A code is only valid for its 30 seconds; credforge also accepts the one before
+   and the one after. The phone must set its time automatically. On the droplet,
+   `timedatectl` must say `System clock synchronized: yes` (Debian's `systemd-timesyncd`; the
+   containers use the host's clock). Off by more than about a minute, every code fails.
+5. **`AUTH_SECRET` must never change.** It encrypts every two-step secret and backup code, and
+   signs sessions. With a different `AUTH_SECRET` everyone is signed out and **nobody** can pass
+   two-step verification. Don't reset everyone: put the original value back from your offline copy
+   (step 5 of the setup), run `docker compose up -d`, and the old entries and codes work again.
+   Only if the original is truly lost, reset each account that had two-step verification on.
+6. **Reset it** (the last resort), in your own SSH session:
+
+   ```bash
+   cd /opt/credforge
+   docker compose exec app node dist/cli.js reset-two-factor --email you@credforge.app
+   ```
+
+   It deletes the account's two-step secret and backup codes (which also clears a lock), turns
+   two-step verification off and ends all of its sessions. The password and Google or Microsoft
+   sign-in stay. It writes `user.two_factor_reset` to the audit log (the address, how many
+   sessions ended and whether it was locked; no secrets), which editing the database by hand
+   would bypass. An address without an account is refused; one without two-step verification is
+   left as it was. Then sign in: with `REQUIRE_MFA_FOR_ADMINS=true`, owners, admins and platform
+   admins go straight to setting it up again. Scan the new QR code, delete the old entry from the
+   authenticator app, and save the new backup codes.
+
+   **For someone else, first make sure it's really them** through a channel you already trust
+   (not just an email from the address): a reset is exactly what someone who has stolen a password
+   would ask for.

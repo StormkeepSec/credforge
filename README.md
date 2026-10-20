@@ -205,6 +205,15 @@ This starts `db`, runs `migrate` once, and then starts `app` and `worker`. The a
   (`docker compose down -v`) before setting the real domain.
 - **`CREDFORGE_MASTER_KEY` encrypts every issuer's signing key. Back it up separately from the
   database.** The app refuses to start with a different key than the one it was set up with.
+- **Two-step verification.** `AUTH_SECRET` encrypts everyone's two-step secrets and backup codes:
+  back it up with the master key and never change it. Authenticator apps name the entry after the
+  instance (`credforge (credforge.app)`, `credforge (localhost)` in development). For someone who
+  can't pass it any more (lost phone and backup codes),
+  `node dist/cli.js reset-two-factor --email <address>` deletes their two-step secret and backup
+  codes, clears a lockout, ends their sessions and records it in the audit log; owners, admins and
+  platform admins must set it up again at their next sign-in when `REQUIRE_MFA_FOR_ADMINS=true`.
+  What to try first (the 15-minute lock after 10 wrong codes, backup codes, the clock) is in
+  [docs/deployment.md](docs/deployment.md#lost-access-to-two-step-verification).
 - **Two database roles.** `migrate` runs as the database owner and creates a restricted role for
   the app and worker (`POSTGRES_APP_PASSWORD`). That role can't run DDL, and it can only read and
   append to the audit log.

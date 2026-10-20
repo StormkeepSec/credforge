@@ -4,6 +4,7 @@ import { signUpAndConfirm } from '../support/accounts';
 import { expectScreen, openScreen } from '../support/app';
 import { expectAccessible } from '../support/axe';
 import { fixtures, SIGNED_IN, testEmail } from '../support/fixtures';
+import { BASE_URL } from '../support/stack';
 import { totp } from '../support/totp';
 
 test.describe('as an organization owner', () => {
@@ -106,6 +107,10 @@ test('a new account turns on two-step verification', async ({ page }) => {
   const key = page
     .getByText('Enter this key in the app instead:')
     .locator('xpath=following-sibling::p[1]');
+  // The entry is named after this site, so it can't be mistaken for another credforge's.
+  await expect(
+    page.getByText(`Name the entry credforge (${new URL(BASE_URL).hostname})`),
+  ).toBeVisible();
   await page.getByLabel('Code from the app').fill(totp((await key.textContent()) ?? ''));
   await page.getByRole('button', { name: 'Turn on' }).click();
   await expect(page.getByRole('heading', { name: '3. Save your backup codes' })).toBeFocused();
