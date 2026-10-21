@@ -1,4 +1,5 @@
 import {
+  type CategoryScore,
   type ModerationItem,
   REPORT_CATEGORY_LABELS,
   type ReportCategory,
@@ -17,7 +18,9 @@ import { Field, Textarea } from './ui/input';
 /**
  * The moderation queue's building blocks (design plan §6.5): an item of held content with its
  * image blurred until the admin chooses to see it, and the actions that take a reason, asked in
- * place (no modal dialogs: their scroll lock needs inline styles, which the CSP blocks).
+ * place (no modal dialogs: their scroll lock needs inline styles, which the CSP blocks). An image
+ * that matched known child sexual abuse material is never shown, not even blurred, and neither is
+ * one the known-CSAM matcher hasn't checked yet (decision 61).
  */
 
 export const KIND_LABELS: Record<string, string> = {
@@ -146,6 +149,67 @@ export function ReasonButton({
   );
 }
 
+/** "sexual 0.93, violence 0.71": scores as people read them. */
+export function formatScores(scores: CategoryScore[], limit = scores.length): string {
+  return scores
+    .slice(0, limit)
+    .map((entry) => `${entry.category} ${entry.score.toFixed(2)}`)
+    .join(', ');
+}
+
+/** In place of the image: why it isn't shown. */
+function WithheldImage({ item }: { item: ModerationItem }) {
+  if (item.withheld === 'known_csam') {
+    const matcher = item.flags.find((flag) => flag.source === 'hash_match')?.provider;
+    return (
+      <Alert live={false} variant="error" title="Known child sexual abuse material: never shown">
+        <p>
+          This image matched {matcher ? `a list of known CSAM (${matcher})` : 'known CSAM'}. It was
+          blocked at once, its organization suspended and the account that uploaded it disabled.
+          Nobody can see it here, not even blurred.
+        </p>
+        {item.evidenceId && (
+          <p className="mt-2">
+            It is kept only as sealed evidence: <code className="break-all">{item.evidenceId}</code>
+            . Report it to the authorities as your runbook says (abuse handling, section 6).
+          </p>
+        )}
+      </Alert>
+    );
+  }
+  return (
+    <Alert live={false} variant="info" title="Not checked for known CSAM yet">
+      The image is shown here once the check against lists of known child sexual abuse material has
+      passed.
+    </Alert>
+  );
+}
+
+/** What the automatic check found, or that it is waiting or failed. */
+function ScanSummary({ item }: { item: ModerationItem }) {
+  const { scan } = item;
+  if (!scan || item.withheld === 'known_csam') return null;
+  if (scan.status === 'waiting') {
+    return <p className="text-muted-foreground">Waiting for the automatic check.</p>;
+  }
+  if (scan.status === 'failed') {
+    return (
+      <p className="text-muted-foreground">
+        The automatic check gave up{scan.error ? `: ${scan.error}` : '.'} Look at it yourself, or
+        check it again.
+      </p>
+    );
+  }
+  return (
+    <p className="text-muted-foreground">
+      {scan.provider
+        ? `Checked automatically by ${scan.provider}${scan.scores.length > 0 ? `, highest scores: ${formatScores(scan.scores, 3)}` : ': nothing scored'}`
+        : 'Checked automatically'}
+      {scan.hashChecked ? '; no match in the known-CSAM lists.' : '.'}
+    </p>
+  );
+}
+
 function Flags({ item }: { item: ModerationItem }) {
   return (
     <ul className="flex flex-wrap gap-2" aria-label="Why it is here">
@@ -155,6 +219,10 @@ function Flags({ item }: { item: ModerationItem }) {
             <Badge variant="neutral">New or changed</Badge>
           ) : flag.source === 'blocklist' ? (
             <Badge variant="warning">Word list: {flag.terms?.join(', ')}</Badge>
+          ) : flag.source === 'scan' ? (
+            <Badge variant="warning">Automatic check: {formatScores(flag.scores ?? [], 2)}</Badge>
+          ) : flag.source === 'hash_match' ? (
+            <Badge variant="danger">Known CSAM match</Badge>
           ) : (
             <Badge variant={flag.category === 'child_safety' ? 'danger' : 'warning'}>
               Reported: {categoryLabel(flag.category)}
@@ -195,6 +263,7 @@ export function ModerationItemCard({
   const what = item.kind === 'image' ? 'image' : 'text';
   const titleId = `item-${item.id}-title`;
   const run = (path: string, done: string, body?: unknown) => act.mutate({ path, body, done });
+  const knownCsam = item.withheld === 'known_csam';
 
   return (
     <Card aria-labelledby={titleId}>
@@ -227,7 +296,11 @@ export function ModerationItemCard({
       <CardContent className="grid gap-4 text-sm">
         <Flags item={item} />
         {item.kind === 'image' ? (
-          <ModerationImage item={item} />
+          item.withheld ? (
+            <WithheldImage item={item} />
+          ) : (
+            <ModerationImage item={item} />
+          )
         ) : (
           <dl className="grid gap-3">
             {item.text?.map((field) => (
@@ -249,6 +322,7 @@ export function ModerationItemCard({
             ` · ${item.heldCredentials} ${item.heldCredentials === 1 ? 'badge waits' : 'badges wait'} for it`}
           {item.subject.removed && ' · Achievement unpublished'}
         </p>
+        <ScanSummary item={item} />
         {item.decidedAt && (
           <p className="text-muted-foreground">
             {item.status === 'removed' ? 'Removed' : 'Decided'} on {formatDate(item.decidedAt)}
@@ -259,7 +333,7 @@ export function ModerationItemCard({
         {act.isError && <Alert variant="error">{errorMessage(act.error)}</Alert>}
       </CardContent>
       <CardFooter className="flex-wrap gap-2">
-        {item.status !== 'cleared' && (
+        {item.status !== 'cleared' && !knownCsam && item.scan?.status !== 'waiting' && (
           <Button
             size="sm"
             pending={act.isPending}
@@ -268,6 +342,18 @@ export function ModerationItemCard({
             }
           >
             {item.status === 'removed' ? 'Put back' : 'Clear and publish'}
+          </Button>
+        )}
+        {item.status === 'pending' && item.scan && item.scan.status !== 'waiting' && (
+          <Button
+            size="sm"
+            variant="outline"
+            pending={act.isPending}
+            onClick={() =>
+              run(`/platform/moderation/items/${item.id}/recheck`, `${kind} will be checked again.`)
+            }
+          >
+            Check again
           </Button>
         )}
         {item.status !== 'removed' && (

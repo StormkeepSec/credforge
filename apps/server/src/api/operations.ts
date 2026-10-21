@@ -906,7 +906,7 @@ export const OPERATIONS: readonly Operation[] = [
     tag: MODERATION_TAG,
     summary: 'An image item, blurred unless asked',
     description:
-      'The 512 px PNG, blurred beyond recognition unless `view=full`. Served inline and never cached.',
+      'The 512 px PNG, blurred beyond recognition unless `view=full`. Served inline and never cached. Never an image that matched known child sexual abuse material (403), nor one the known-CSAM matcher hasn’t checked yet (409).',
     auth: PLATFORM,
     query: z.object({ view: z.enum(['blurred', 'full']).optional() }),
     responses: [file('image/png', 'The image')],
@@ -917,9 +917,19 @@ export const OPERATIONS: readonly Operation[] = [
     tag: MODERATION_TAG,
     summary: 'Clear an item: publish it',
     description:
-      'Badges awarded to members while it waited become public once nothing else holds them. The owners are emailed.',
+      'Badges awarded to members while it waited become public once nothing else holds them. The owners are emailed. Not before its automatic check has run (409), and never for known child sexual abuse material (403).',
     auth: PLATFORM,
     body: moderationClearInput,
+    responses: [ok(moderationItemSchema)],
+  },
+  {
+    method: 'POST',
+    path: '/platform/moderation/items/{itemId}/recheck',
+    tag: MODERATION_TAG,
+    summary: 'Run an item’s automatic check again',
+    description:
+      'For an item waiting for review, typically one whose check gave up after its last attempt. It leaves the queue until the check has run.',
+    auth: PLATFORM,
     responses: [ok(moderationItemSchema)],
   },
   {

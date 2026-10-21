@@ -117,7 +117,14 @@ export const achievementRoutes: FastifyPluginAsync<{
         .where(eq(achievement.id, achievementId))
         .returning();
       if (!after) throw notFound('Achievement');
-      await reviewAchievementText(tx, config.moderation, access.org, after, access.userId);
+      await reviewAchievementText(
+        tx,
+        config.moderation,
+        access.org,
+        after,
+        access.userId,
+        services.jobs,
+      );
       await tx.insert(achievementRevision).values({
         achievementId,
         revision,
@@ -198,7 +205,14 @@ export const achievementRoutes: FastifyPluginAsync<{
         })
         .returning();
       if (!row) throw new Error('Insert returned no row.');
-      await reviewAchievementText(tx, config.moderation, access.org, row, access.userId);
+      await reviewAchievementText(
+        tx,
+        config.moderation,
+        access.org,
+        row,
+        access.userId,
+        services.jobs,
+      );
       await tx.insert(achievementRevision).values({
         achievementId: row.id,
         revision: 1,
@@ -260,7 +274,7 @@ export const achievementRoutes: FastifyPluginAsync<{
       },
       { config, limiter: uploadLimiter, org: access.org, reply },
     );
-    await reviewImage(db, config.moderation, access.org, image, access.userId);
+    await reviewImage(db, config.moderation, access.org, image, access.userId, services.jobs);
     await saveChange(
       request,
       access,

@@ -196,7 +196,9 @@ with `S3_ENDPOINT=https://sfo3.digitaloceanspaces.com`, `S3_REGION=sfo3`,
 `SECURITY_EMAIL=security@credforge.app`, `OPERATOR_NAME` (who runs the instance, as `/privacy`
 and `/terms` name it), and `LEGAL_PAGES_DRAFT=true` until you have reviewed those two pages (they
 say "Draft for review" until then; Google's consent screen links to them). Leave
-`SENDGRID_WEBHOOK_PUBLIC_KEY` and the Google and Microsoft settings empty for now.
+`SENDGRID_WEBHOOK_PUBLIC_KEY` and the Google and Microsoft settings empty for now. The automatic
+checks (`MODERATION_PROVIDER`, `CSAM_MATCHER`) stay `none` until you choose to set them up
+(below).
 
 ⚠️ **`PUBLIC_BASE_URL` is permanent**: every credential embeds it, and the app refuses to start
 if it changes. Get it right before the first start.
@@ -430,6 +432,24 @@ sudo certbot certificates
   `chown 1000 … && chmod 400 …`), mounted into `app` by a `docker-compose.override.yml` in
   `/opt/credforge` and named with `MODERATION_TEXT_BLOCKLIST_FILE` in `.env` (the override is in
   [abuse-handling.md](abuse-handling.md), §2). Restart `app` after changing it.
+- **Automatic checks** are off until you set them in `.env` ([abuse-handling.md](abuse-handling.md)
+  §2, the contract in [moderation-webhooks.md](moderation-webhooks.md)), then
+  `docker compose up -d app worker`. The **worker** runs them: `docker compose logs worker` shows
+  each check ("content checked", with its outcome) and failures being retried. The privacy policy
+  names the provider and matcher you set, so review `/privacy` again after turning one on. A
+  webhook service on the droplet itself can join the compose network (a service in your
+  `docker-compose.override.yml`) and be called as `http://<service>:<port>/…`; anything else
+  needs `https://`.
+- **Known-CSAM matching** needs `CSAM_EVIDENCE_PUBLIC_KEY` in `.env` (the private key stays off the
+  droplet, offline). Matches are sealed into the database, so the nightly backups carry them,
+  still sealed. To export one for a report:
+  `docker compose run --rm -T migrate node dist/cli.js export-evidence --id <id> > evidence-<id>.json`
+  (the `migrate` service has the database owner's rights, which reading evidence needs; the export
+  is recorded in the audit log). To block known CSAM found outside credforge, such as a notice
+  from Cloudflare's CSAM Scanning Tool:
+  `docker compose exec app node dist/cli.js block-known-csam --image-url <url> --source "…"`
+  (add `--yes` once its summary is right). The runbook is [abuse-handling.md](abuse-handling.md)
+  §6.
 - A request to delete a recipient's data (to the privacy address) goes to the organization that
   awarded the badge: its owners and admins use **Erase this person's data** on one of the badges.
   If the organization doesn't answer, or is suspended,
@@ -455,6 +475,7 @@ sudo certbot certificates
 | Two-step codes refused, or "too many failed verification attempts" | [Lost access to two-step verification](#lost-access-to-two-step-verification), next |
 | A new org's achievement page says "Waiting for review" and its badges' pages are 404 to others | Content waits for review (`MODERATION_REVIEW`): approve the org or clear its content in **Moderation**, or mark it trusted |
 | A removed image still shows somewhere | Caches: up to 10 minutes in browsers and nginx (`sudo rm -rf /var/cache/nginx/credforge-images/*`); link previews and email clients keep their own copies |
+| New content stays "waiting for review" even for trusted orgs | An automatic check is set up and hasn't run: `docker compose logs worker` (the scanner may be unreachable; after 5 attempts the item waits in **Moderation** with "Check again") |
 
 ### Lost access to two-step verification
 

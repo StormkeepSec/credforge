@@ -96,7 +96,7 @@ export const issuerRoutes: FastifyPluginAsync<{
         })
         .returning();
       if (!row) throw new Error('Insert returned no row.');
-      await reviewIssuerText(tx, config.moderation, access.org, row, access.userId);
+      await reviewIssuerText(tx, config.moderation, access.org, row, access.userId, services.jobs);
       const key = await createSigningKey(tx, keys, { orgId: access.org.id, issuerId: row.id });
       // Fails the whole creation if the stored key doesn't decrypt to a working signer.
       await loadSigner(keys, config.publicBaseUrl, key);
@@ -157,7 +157,14 @@ export const issuerRoutes: FastifyPluginAsync<{
         .where(and(eq(issuer.orgId, access.org.id), eq(issuer.id, issuerId)))
         .returning();
       if (!after) throw notFound('Issuer');
-      await reviewIssuerText(tx, config.moderation, access.org, after, access.userId);
+      await reviewIssuerText(
+        tx,
+        config.moderation,
+        access.org,
+        after,
+        access.userId,
+        services.jobs,
+      );
       const diff = changes(before, after);
       if (Object.keys(diff).length > 0) {
         await recordAudit(tx, {
@@ -206,7 +213,7 @@ export const issuerRoutes: FastifyPluginAsync<{
         .where(and(eq(issuer.orgId, access.org.id), eq(issuer.id, issuerId)))
         .for('update');
       if (!before) throw notFound('Issuer');
-      await reviewImage(tx, config.moderation, access.org, logo, access.userId);
+      await reviewImage(tx, config.moderation, access.org, logo, access.userId, services.jobs);
       if (before.imageFileId === logo.id) return null;
       await tx
         .update(issuer)

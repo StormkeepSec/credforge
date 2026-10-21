@@ -1,4 +1,5 @@
 import type {
+  CategoryScore,
   ModerationFlag as FlagView,
   ModerationItem,
   ModerationUser,
@@ -14,6 +15,7 @@ import {
   inArray,
   issuer,
   lt,
+  moderationEvidence,
   moderationItem,
   or,
   organization,
@@ -24,7 +26,7 @@ import {
 } from '@credforge/db';
 import { achievementUrl } from '../achievements/service';
 import { issuerUrl } from '../issuers/service';
-import type { ModerationItemRow } from './service';
+import { imageWithheld, type ModerationItemRow } from './service';
 
 /** Field labels for text items, in the order the queue shows them. */
 const LABELS: Record<string, Record<string, string>> = {
@@ -40,7 +42,7 @@ const LABELS: Record<string, Record<string, string>> = {
   },
 };
 
-function textFields(row: ModerationItemRow): ModerationItem['text'] {
+export function textFields(row: ModerationItemRow): ModerationItem['text'] {
   if (row.kind !== 'text' || !row.content) return null;
   const labels = LABELS[row.subjectType] ?? {};
   const fields: NonNullable<ModerationItem['text']> = [];
@@ -64,6 +66,13 @@ function textFields(row: ModerationItemRow): ModerationItem['text'] {
   return fields;
 }
 
+/** Scores highest first. */
+function scoreList(scores: Record<string, number>): CategoryScore[] {
+  return Object.entries(scores)
+    .map(([category, score]) => ({ category, score }))
+    .sort((a, b) => b.score - a.score);
+}
+
 function flagViews(row: ModerationItemRow): FlagView[] {
   return row.flags.map((flag) => ({
     source: flag.source,
@@ -71,14 +80,50 @@ function flagViews(row: ModerationItemRow): FlagView[] {
     terms: flag.source === 'blocklist' ? flag.terms : null,
     reportId: flag.source === 'report' ? flag.reportId : null,
     category: flag.source === 'report' ? (flag.category as FlagView['category']) : null,
+    provider:
+      flag.source === 'scan' ? flag.provider : flag.source === 'hash_match' ? flag.matcher : null,
+    scores: flag.source === 'scan' ? scoreList(flag.categories) : null,
   }));
 }
 
-/** Items as the moderation queue shows them, with their org, subject, uploader and image. */
+function scanView(row: ModerationItemRow): ModerationItem['scan'] {
+  if (!row.scanStatus) return null;
+  const result = row.scanResult ?? {};
+  return {
+    status: row.scanStatus,
+    scannedAt: row.scannedAt?.toISOString() ?? null,
+    provider: result.classifier?.provider ?? null,
+    scores: scoreList(result.classifier?.scores ?? {}),
+    hashChecked: result.hashCheck?.matched === false,
+    error: row.scanStatus === 'done' ? null : (result.error ?? null),
+  };
+}
+
+/** How an owners' email names an item: "the badge image of “Intro to Network Defense”". */
+export function describeItem(row: ModerationItemRow, subjectName: string): string {
+  const name =
+    (row.kind === 'text' && typeof row.content?.name === 'string'
+      ? row.content.name
+      : subjectName) || 'unnamed';
+  if (row.kind === 'image') {
+    return row.subjectType === 'achievement'
+      ? `the badge image of “${name}”`
+      : `the logo of “${name}”`;
+  }
+  if (row.subjectType === 'achievement') return `the text of the achievement “${name}”`;
+  if (row.subjectType === 'issuer') return `the profile of the issuer “${name}”`;
+  return `the organization name “${name}”`;
+}
+
+/**
+ * Items as the moderation queue shows them, with their org, subject, uploader and image.
+ * `hashMatching`: a known-CSAM matcher is set up, so images it hasn't checked are withheld.
+ */
 export async function serializeItems(
   db: Queryable,
   publicBaseUrl: string,
   rows: ModerationItemRow[],
+  options: { hashMatching: boolean },
 ): Promise<ModerationItem[]> {
   if (rows.length === 0) return [];
   const ids = (pick: (row: ModerationItemRow) => string | null) => [
@@ -172,6 +217,22 @@ export async function serializeItems(
       `)
     ).rows.map((row) => [row.id, row.count]),
   );
+  const blocked = rows.filter((row) => row.flags.some((flag) => flag.source === 'hash_match'));
+  const evidence = new Map(
+    blocked.length
+      ? (
+          await db
+            .select({ id: moderationEvidence.id, itemId: moderationEvidence.itemId })
+            .from(moderationEvidence)
+            .where(
+              inArray(
+                moderationEvidence.itemId,
+                blocked.map((row) => row.id),
+              ),
+            )
+        ).map((row) => [row.itemId, row.id])
+      : [],
+  );
   const userOf = (id: string | null): ModerationUser | null => {
     const found = id ? users.get(id) : undefined;
     return found
@@ -218,6 +279,9 @@ export async function serializeItems(
       },
       text: textFields(row),
       image: image ? { mimeType: image.mimeType, width: image.width, height: image.height } : null,
+      scan: scanView(row),
+      withheld: imageWithheld(row, options.hashMatching),
+      evidenceId: evidence.get(row.id) ?? null,
       heldCredentials: held.get(row.id) ?? 0,
       submittedBy: userOf(row.submittedBy),
       submittedAt: row.submittedAt.toISOString(),
@@ -232,7 +296,9 @@ export async function serializeItems(
  * Pending items worth a platform admin's time: the content an org's public pages would show (the
  * current text and image of published achievements, issuers and org names), anything reported,
  * and anything a badge waits for. Drafts, unpublished achievements and versions edited away since
- * aren't public, so they stay out of the queue until they are.
+ * aren't public, so they stay out of the queue until they are, and so does content whose automatic
+ * check hasn't run yet (decision 60): it may clear it, and an image it hasn't checked for known
+ * CSAM isn't shown to anyone.
  */
 export const IN_QUEUE: SQL = sql`(
   (${moderationItem.kind} = 'text' and (
@@ -246,7 +312,7 @@ export const IN_QUEUE: SQL = sql`(
   ))
   or ${moderationItem.flags} @> '[{"source": "report"}]'::jsonb
   or exists (select 1 from credential c where ${moderationItem.id} = any(c.held_item_ids))
-)`;
+) and ${moderationItem.scanStatus} is distinct from 'waiting'`;
 
 export interface ItemListQuery {
   status: ModerationItemRow['status'];

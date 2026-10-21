@@ -11,7 +11,8 @@
 > privacy policy and terms, encrypted nightly backups with a tested restore), an organization
 > can erase a recipient's data on request, recipients can sign in to see all their badges in
 > one place (**My badges**), and platform admins have content moderation (held content, a
-> moderation queue, in-app reports); deploying to credforge.app is next. See the
+> moderation queue, in-app reports, pluggable automatic checks and a slot for known-CSAM hash
+> matching); deploying to credforge.app is next. See the
 > [design plan](docs/design-plan.md) for the architecture and the roadmap.
 
 ## Requirements
@@ -71,7 +72,9 @@ And M5:
   clear, remove, unpublish, suspend, revoke every badge and disable an account. Approving an org on
   the Platform screen publishes the content it shows. In development everything waits too (the
   default `MODERATION_REVIEW=untrusted`): approve your org, or mark it trusted, on the Platform
-  screen.
+  screen. With an automatic check set up (off by default), the worker scores new content first
+  and the queue shows the scores; an image that matches known child sexual abuse material is
+  blocked and never shown, even to platform admins.
 - **Erase this person's data** (a badge's screen, owners and admins): for a request to delete a
   recipient's data. It first lists what it covers (every badge awarded to that address, badges
   linked to them by a reissue, CSV rows holding it), then revokes the badges for good and removes
@@ -121,6 +124,8 @@ two-step verification (TOTP) before they can continue, whichever way they sign i
 | `pnpm --filter @credforge/server cli revoke-org-credentials --org <id> --reason …` | Revoke every badge of a suspended organization (abuse); without `--yes` it only counts them |
 | `pnpm --filter @credforge/server cli erase-recipient --org <id> --email …` | Erase a recipient's data from an organization's records, for a request that reaches the operator (or `--credential <id>`); without `--yes` it only says what it would erase |
 | `pnpm --filter @credforge/server cli reapply-erasures` | After restoring a backup: erase again whoever was erased since it was taken (`deploy/restore.sh` runs it) |
+| `pnpm --filter @credforge/server cli block-known-csam --image-url <url> --source <name>` | Block known child sexual abuse material found outside credforge, as a matcher's match does (seal the evidence, suspend, disable); without `--yes` it only says what it would do |
+| `pnpm --filter @credforge/server cli export-evidence --id <id>` | Write sealed known-CSAM evidence to standard output (needs the database owner); `open-evidence --key … --in … --out …` opens it offline with the evidence private key |
 
 ### Tests
 
@@ -165,8 +170,10 @@ API docs (no CSP errors). The moderation tests have a new org's first content wa
 (its public page leaves it out), report it from that page, review it on the Platform screen and in
 the moderation queue (a blurred image shown and blurred again, a removal's reason asked in place,
 clearing), resolve the report and approve the org; and send the report form on a page of its own,
-with a mistake first. The seed marks its own org trusted, so the other tests see their content at
-once. The erasure test sets up an organization of its own, reviews what erasing
+with a mistake first. Another blocks a new org's badge image as known child sexual abuse material
+with `cli.js block-known-csam` (under a throwaway evidence key) and checks that the queue never
+shows it, not even blurred, and that its URL answers the "Image removed" tile. The seed marks its
+own org trusted, so the other tests see their content at once. The erasure test sets up an organization of its own, reviews what erasing
 a recipient would cover, confirms it, and checks the erased badge's screen and its public page
 (410). The My badges tests award badges to a new recipient-only account (which lands on My badges),
 hide and show a badge's page, add and confirm an extra address from its Mailpit link, and check the
@@ -259,6 +266,14 @@ This starts `db`, runs `migrate` once, and then starts `app` and `worker`. The a
   `ORG_STORAGE_QUOTA_MB` (500) limit each org's uploads, `REPORT_RATE_LIMIT` (10 an hour per
   client IP) the report form. Cleared images are cached for 10 minutes, so a removed one leaves
   browsers and nginx within that time.
+- **Automatic checks** ([docs/moderation-webhooks.md](docs/moderation-webhooks.md)), all off by
+  default. `MODERATION_PROVIDER` (`none`, `webhook` for any service behind a signed webhook,
+  `openai` for OpenAI's free moderation endpoint) scores new images and public text before they
+  are published; `MODERATION_HOLD_THRESHOLD` (0.5), `MODERATION_REMOVE_THRESHOLD` (unset: never)
+  and `MODERATION_CATEGORY_THRESHOLDS` decide what is held or removed. `CSAM_MATCHER=webhook`
+  plugs in a known-CSAM hash matcher you have vetted access to; a match is blocked, the org
+  suspended and the evidence sealed to `CSAM_EVIDENCE_PUBLIC_KEY`, whose private key you keep
+  offline. The privacy policy names whichever is on.
 - **Contacts and legal pages.** `ABUSE_EMAIL` is offered on the report form and receives owners'
   replies to moderation emails, `SECURITY_EMAIL` serves `/.well-known/security.txt`, and
   `OPERATOR_NAME` and `PRIVACY_EMAIL` fill in `/privacy` and `/terms`. Those pages are drafts, and say so, until you review them and

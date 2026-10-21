@@ -12,6 +12,7 @@ import { createDomainChecker } from './issuers/domain';
 import { registerJobs } from './jobs';
 import { createJobQueue } from './jobs/enqueue';
 import { loggerOptions } from './logger';
+import { createScanners } from './moderation/scan';
 import { createQueueClient } from './queue';
 import { onShutdown } from './shutdown';
 
@@ -35,6 +36,9 @@ try {
   await enforcePublicBaseUrl(db, config, log);
   await enforceMasterKey(db, keys, log);
   await boss.start();
+  const storage = createStorage(config.storage);
+  const outbox = createQueueOutbox(boss);
+  const jobs = createJobQueue(boss);
   await registerJobs(boss, log, {
     emailTransport: createEmailTransport(config, log),
     deliveryTracker: createDeliveryTracker(db),
@@ -42,11 +46,13 @@ try {
       db,
       config,
       keys,
-      outbox: createQueueOutbox(boss),
-      storage: createStorage(config.storage),
-      jobs: createJobQueue(boss),
+      outbox,
+      storage,
+      jobs,
       domains: createDomainChecker(`credforge-domain-check (+${config.publicBaseUrl})`),
     },
+    // Always: with no scanner set up (any more), checks still waiting finish under the policy.
+    moderation: { db, config, storage, outbox, jobs, scanners: createScanners(config) },
   });
 } catch (err) {
   log.fatal({ err }, 'worker failed to start');
@@ -59,4 +65,11 @@ onShutdown(log, async () => {
   await pool.end();
 });
 
-log.info({ emailTransport: config.email.transport }, 'credforge worker ready');
+log.info(
+  {
+    emailTransport: config.email.transport,
+    moderationProvider: config.moderation.scanner.provider,
+    csamMatcher: config.moderation.csamMatcher.kind,
+  },
+  'credforge worker ready',
+);

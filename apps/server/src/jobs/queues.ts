@@ -8,6 +8,8 @@ export const QUEUES = {
   batch: 'batch.issue',
   /** Re-signs and publishes a status list after a revocation, debounced (§8.6). */
   statusList: 'status-list.publish',
+  /** Runs the automatic check of a new image or text before it can be published (§6.5). */
+  scan: 'moderation.scan',
   /**
    * Every minute: publishes lists and resumes batches whose job went missing, and deletes CSV
    * uploads after 30 days. The database, not the queue, says what is left to do.

@@ -3,6 +3,27 @@ import pg from 'pg';
 /** Tables the app's role may read and append to, but never change or delete from. */
 export const APPEND_ONLY_TABLES = ['audit_event'] as const;
 
+/**
+ * Tables the app's role may append to and read only some columns of: known-CSAM evidence (design
+ * plan §6.5), whose sealed `envelope` only the database owner reads (`cli.js export-evidence`).
+ */
+export const WRITE_ONLY_COLUMNS: Record<string, { readable: string[] }> = {
+  moderation_evidence: {
+    readable: [
+      'id',
+      'org_id',
+      'item_id',
+      'file_id',
+      'content_sha256',
+      'source',
+      'matcher',
+      'key_fingerprint',
+      'envelope_sha256',
+      'created_at',
+    ],
+  },
+};
+
 export interface AppRoleOptions {
   /** Login role the app and worker connect as (the user in DATABASE_URL). */
   role: string;
@@ -48,6 +69,11 @@ export async function grantAppRole(owner: pg.Pool | pg.Client, options: AppRoleO
     ...APPEND_ONLY_TABLES.map(
       (table) => `revoke update, delete, truncate on ${pg.escapeIdentifier(table)} from ${role}`,
     ),
+    ...Object.entries(WRITE_ONLY_COLUMNS).flatMap(([table, { readable }]) => [
+      `revoke all on ${pg.escapeIdentifier(table)} from ${role}`,
+      `grant insert on ${pg.escapeIdentifier(table)} to ${role}`,
+      `grant select (${readable.map((column) => pg.escapeIdentifier(column)).join(', ')}) on ${pg.escapeIdentifier(table)} to ${role}`,
+    ]),
   ];
   for (const schema of options.extraSchemas ?? []) {
     const name = pg.escapeIdentifier(schema);

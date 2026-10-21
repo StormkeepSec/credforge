@@ -931,15 +931,39 @@ export interface PlatformOrg extends OrgSummary {
   storageUsedBytes: number;
 }
 
+/** A category a scanner scored, from 0 to 1, in the provider's own words. */
+export interface CategoryScore {
+  category: string;
+  score: number;
+}
+
 /** Why a moderation item is (or was) held. */
 export interface ModerationFlag {
-  source: 'review' | 'blocklist' | 'report';
+  source: 'review' | 'blocklist' | 'report' | 'scan' | 'hash_match';
   at: string;
   /** Word-list terms found (`blocklist`), as the operator listed them. */
   terms: string[] | null;
   /** The report (`report`). */
   reportId: string | null;
   category: ReportCategory | null;
+  /** The scanner (`scan`) or known-CSAM matcher (`hash_match`). */
+  provider: string | null;
+  /** Categories at or over the operator's hold threshold, highest first (`scan`). */
+  scores: CategoryScore[] | null;
+}
+
+/** The automatic check of an item (design plan §6.5, decision 60). */
+export interface ModerationScan {
+  /** `waiting` to run (nothing is published meanwhile), `done`, or `failed` (a person decides). */
+  status: 'waiting' | 'done' | 'failed';
+  scannedAt: string | null;
+  /** The classifier, and every category it scored, highest first. */
+  provider: string | null;
+  scores: CategoryScore[];
+  /** Checked against lists of known child sexual abuse material, with no match. */
+  hashChecked: boolean;
+  /** Why the last attempt failed. */
+  error: string | null;
 }
 
 export interface ModerationUser {
@@ -970,6 +994,15 @@ export interface ModerationItem {
   text: { field: string; label: string; value: string }[] | null;
   /** Image items: fetch the image itself, blurred or not, from `…/items/{id}/image`. */
   image: { mimeType: string; width: number | null; height: number | null } | null;
+  /** Null when no automatic check applied. */
+  scan: ModerationScan | null;
+  /**
+   * The image is never shown, not even blurred: `known_csam` after a match (for good), or
+   * `awaiting_check` until the known-CSAM check has passed.
+   */
+  withheld: 'known_csam' | 'awaiting_check' | null;
+  /** The sealed evidence of a known-CSAM match (`cli.js export-evidence`). */
+  evidenceId: string | null;
   /** Badges awarded to the org's members that carry it and wait for it. */
   heldCredentials: number;
   submittedBy: ModerationUser | null;
@@ -1017,6 +1050,18 @@ export interface ContentReportPage {
 export interface ModerationSummary {
   pendingItems: number;
   openReports: number;
+  /** The automatic checks set up on this instance (design plan §6.5). */
+  scanning: {
+    /** The classifier, and what it checks; null when none is set up. */
+    provider: string | null;
+    images: boolean;
+    text: boolean;
+    /** The known-CSAM matcher; null when none is set up. */
+    csamMatcher: string | null;
+    /** Items waiting for their check, and checks that gave up (waiting for a person). */
+    waiting: number;
+    failed: number;
+  };
 }
 
 export interface Alignment {

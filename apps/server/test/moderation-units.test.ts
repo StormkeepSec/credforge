@@ -67,7 +67,10 @@ describe('the word list', () => {
       PUBLIC_BASE_URL: 'https://credforge.test',
       DATABASE_URL: 'postgres://x',
     };
-    expect(loadConfig(base).moderation).toEqual({ review: 'untrusted', blocklist: { terms: [] } });
+    expect(loadConfig(base).moderation).toMatchObject({
+      review: 'untrusted',
+      blocklist: { terms: [] },
+    });
     const config = loadConfig({
       ...base,
       MODERATION_TEXT_BLOCKLIST: 'zorblax',

@@ -421,6 +421,31 @@ export function reportReceivedMessage(input: {
   });
 }
 
+/**
+ * To each platform admin: an image matched known child sexual abuse material and was blocked
+ * (design plan §6.5, decision 61). Nothing in it shows or links to the image.
+ */
+export function knownCsamBlockedMessage(input: {
+  to: string;
+  orgName: string;
+  matcher: string;
+  evidenceId: string;
+  suspended: boolean;
+  disabledEmail: string | null;
+  queueUrl: string;
+}): EmailMessage {
+  return render('known-csam-blocked', input.to, 'Known child sexual abuse material blocked', {
+    paragraphs: [
+      `An image uploaded to ${input.orgName} matched known child sexual abuse material (${input.matcher}). It was blocked at once and is never shown, not even to platform admins; it is kept only as sealed evidence (${input.evidenceId}).`,
+      input.suspended
+        ? `${input.orgName} was suspended${input.disabledEmail ? `, and the account that uploaded the image (${input.disabledEmail}) disabled` : ''}. Their notices give no reason beyond a review.`
+        : `${input.orgName} was already suspended.${input.disabledEmail ? ` The account that uploaded the image (${input.disabledEmail}) was disabled.` : ''}`,
+      'You will probably have to report it to the authorities. Follow your runbook (docs/abuse-handling.md, section 6) and don’t forward or copy anything about it beyond what the report needs.',
+    ],
+    action: { label: 'Open the moderation queue', url: input.queueUrl },
+  });
+}
+
 /** To an org's owners: the account of one of its members was disabled. */
 export function memberDisabledMessage(
   to: string,

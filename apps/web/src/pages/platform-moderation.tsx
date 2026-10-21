@@ -1,4 +1,9 @@
-import type { ContentReport, ModerationStatus, ReportStatus } from '@credforge/contracts';
+import type {
+  ContentReport,
+  ModerationStatus,
+  ModerationSummary,
+  ReportStatus,
+} from '@credforge/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ExternalLink, Flag } from 'lucide-react';
 import { useState } from 'react';
@@ -148,6 +153,26 @@ function ReportCard({
   );
 }
 
+/** Which automatic checks run on this instance (design plan §6.5, decision 60). */
+function ScanningStatus({ scanning }: { scanning: ModerationSummary['scanning'] }) {
+  const checks = [scanning.images && 'images', scanning.text && 'public text']
+    .filter(Boolean)
+    .join(' and ');
+  return (
+    <p className="mb-4 text-sm text-muted-foreground">
+      {scanning.provider
+        ? `Automatic check: ${scanning.provider} scores new ${checks}.`
+        : 'No automatic check is set up: content waits for people only.'}{' '}
+      {scanning.csamMatcher
+        ? `Images are matched against known CSAM by ${scanning.csamMatcher}.`
+        : 'No known-CSAM matching is set up.'}
+      {scanning.waiting > 0 && ` ${scanning.waiting} waiting for their check.`}
+      {scanning.failed > 0 &&
+        ` ${scanning.failed} ${scanning.failed === 1 ? 'check' : 'checks'} gave up: look at ${scanning.failed === 1 ? 'it' : 'them'} yourself.`}
+    </p>
+  );
+}
+
 /**
  * Platform admins: the moderation queue (design plan §6.5). Content waiting for review (images
  * blurred until asked), reports from public pages, and what was cleared or removed.
@@ -178,6 +203,7 @@ export function PlatformModerationPage() {
         title="Moderation"
         description="Images and text waiting for review, and reports from public pages. Images stay blurred until you choose to see them."
       />
+      {summary.data && <ScanningStatus scanning={summary.data.scanning} />}
       <fieldset className="mb-6 min-w-0">
         <legend className="sr-only">Show</legend>
         <div className="flex flex-wrap gap-2">

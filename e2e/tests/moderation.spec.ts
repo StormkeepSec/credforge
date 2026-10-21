@@ -1,28 +1,31 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { type Browser, expect, type Page, test } from '@playwright/test';
 import { BADGE_SVG, enableTwoFactor, post, put, signUpAndConfirm } from '../support/accounts';
 import { expectScreen, openScreen } from '../support/app';
 import { expectAccessible } from '../support/axe';
 import { fixtures, SIGNED_IN, SIGNED_OUT, testEmail } from '../support/fixtures';
+import { runPnpm } from '../support/stack';
 
 // Content moderation (design plan §6.5): an org's first content waiting for review on the
 // Platform screen, the moderation queue with its blurred images and actions asked in place, and
-// the "Report a problem" form on public pages, each screen checked with axe in light and dark at
-// 1280 and 375 px.
+// the "Report a problem" form on public pages, and an image blocked as known child sexual abuse
+// material, never shown in the queue (decision 61), each screen checked with axe in light and dark
+// at 1280 and 375 px.
 
 /**
  * A new org with a logo and a published achievement: all of it waits for review. Its owner is an
  * account of its own (the seeded owner may have only three orgs waiting for approval).
  */
-async function moderatedOrg(browser: Browser) {
+async function moderatedOrg(browser: Browser, label = 'Moderated') {
   const { runId, password } = fixtures();
   const owner = await browser.newContext({ storageState: SIGNED_OUT });
   const request = owner.request;
   await signUpAndConfirm(request, {
-    name: 'E2E Moderated Owner',
-    email: testEmail(runId, 'moderated'),
+    name: `E2E ${label} Owner`,
+    email: testEmail(runId, label.toLowerCase()),
     password,
   });
-  const name = `E2E Moderation ${runId}`;
+  const name = label === 'Moderated' ? `E2E Moderation ${runId}` : `E2E ${label} Org ${runId}`;
   const org = await post<{ id: string }>(request, '/api/v1/orgs', { name });
   // Owners turn on two-step verification before anything else (REQUIRE_MFA_FOR_ADMINS).
   await enableTwoFactor(request, password);
@@ -34,20 +37,37 @@ async function moderatedOrg(browser: Browser) {
   });
   await put(request, `${api}/issuers/${issuer.id}/logo`, BADGE_SVG, 'image/svg+xml');
   const achievement = await post<{ id: string }>(request, `${api}/achievements`, {
-    name: `E2E Moderated ${runId}`,
+    name: `E2E ${label} ${runId}`,
     description: 'Waits for a platform admin before its page shows it.',
     criteriaNarrative: 'Took part in the end-to-end tests.',
     tags: ['review'],
   });
-  await put(
+  const { image } = await put<{ image: { url512: string } }>(
     request,
     `${api}/achievements/${achievement.id}/image`,
-    Buffer.from(BADGE_SVG.toString().replace('#379392', '#CA3CFF')),
+    // Its own colour per org, so each image is its own file (and its own block).
+    Buffer.from(
+      BADGE_SVG.toString().replace(
+        '#379392',
+        label === 'Moderated'
+          ? '#CA3CFF'
+          : `#${runId
+              .replace(/[^0-9a-f]/g, '')
+              .padEnd(6, '0')
+              .slice(0, 6)}`,
+      ),
+    ),
     'image/svg+xml',
   );
   await post(request, `${api}/achievements/${achievement.id}/publish`);
   await owner.close();
-  return { orgId: org.id, name, achievementId: achievement.id, issuerId: issuer.id };
+  return {
+    orgId: org.id,
+    name,
+    achievementId: achievement.id,
+    issuerId: issuer.id,
+    imageUrl: image.url512,
+  };
 }
 
 /** Sends the report form folded into a public page (or on its own page). */
@@ -159,6 +179,65 @@ test.describe('as a platform admin', () => {
       `E2E Moderated ${fixtures().runId}`,
     );
     await anonymous.close();
+  });
+});
+
+test.describe('known child sexual abuse material', () => {
+  test.use({ storageState: SIGNED_IN.admin });
+
+  test('blocked from the command line: never shown in the queue, not even blurred', async ({
+    page,
+    browser,
+  }) => {
+    test.setTimeout(180_000);
+    const { runId } = fixtures();
+    const org = await moderatedOrg(browser, 'Blocked');
+    // A throwaway evidence key: the evidence of this test is never opened.
+    const evidenceKey = generateKeyPairSync('rsa', { modulusLength: 3072 })
+      .publicKey.export({ type: 'spki', format: 'der' })
+      .toString('base64');
+    const output = await runPnpm(
+      [
+        '--filter',
+        '@credforge/server',
+        'cli',
+        'block-known-csam',
+        '--image-url',
+        org.imageUrl,
+        '--source',
+        'E2E-tests',
+        '--yes',
+      ],
+      { CSAM_EVIDENCE_PUBLIC_KEY: evidenceKey },
+    );
+    expect(output).toContain('Blocked item');
+
+    await openScreen(page, '/app/platform/moderation', 'Moderation');
+    await page.getByRole('button', { name: /^Removed/ }).click();
+    const card = page.getByRole('region', {
+      name: new RegExp(`^Badge image · E2E Blocked ${runId}`),
+    });
+    await expect(card.getByText('Known child sexual abuse material: never shown')).toBeVisible();
+    await expect(card.getByText('Known CSAM match')).toBeVisible();
+    await expect(card.getByRole('img')).toHaveCount(0);
+    await expect(card.getByRole('button', { name: 'Put back' })).toHaveCount(0);
+    await expectAccessible(page, 'moderation: known CSAM, never shown');
+
+    // Nor through the API, and its public URL answers the "Image removed" tile.
+    const items = (await (
+      await page.request.get(`/api/v1/platform/moderation/items?status=removed&orgId=${org.orgId}`)
+    ).json()) as { items: { id: string; kind: string; withheld: string | null }[] };
+    const blocked = items.items.find((item) => item.kind === 'image');
+    expect(blocked?.withheld).toBe('known_csam');
+    const image = await page.request.get(
+      `/api/v1/platform/moderation/items/${blocked?.id}/image?view=blurred`,
+    );
+    expect(image.status()).toBe(403);
+    const visitor = await browser.newContext({ storageState: SIGNED_OUT });
+    const tile = await visitor.request.get(new URL(org.imageUrl).pathname);
+    expect(tile.headers()['content-type']).toBe('image/png');
+    expect(tile.headers()['cache-control']).toBe('public, max-age=300');
+    await visitor.close();
   });
 });
 

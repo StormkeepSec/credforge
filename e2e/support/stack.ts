@@ -19,13 +19,13 @@ export async function reachable(url: string): Promise<boolean> {
 /**
  * Runs pnpm in the repository root and returns its output. Uses the pnpm that started this run
  * (`npm_execpath`), so it works when pnpm is only available through corepack and not on PATH.
- * Arguments must not need shell quoting.
+ * Arguments must not need shell quoting. `env` adds settings for this command only.
  */
-export async function runPnpm(args: string[]): Promise<string> {
+export async function runPnpm(args: string[], env: Record<string, string> = {}): Promise<string> {
   const options = {
     cwd: REPO_ROOT,
     // The CLI reads the same development defaults as `pnpm dev`.
-    env: { ...process.env, NODE_ENV: 'development' },
+    env: { ...process.env, NODE_ENV: 'development', ...env },
   };
   const entry = process.env.npm_execpath;
   const { stdout } =

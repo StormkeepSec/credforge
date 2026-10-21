@@ -1,11 +1,18 @@
 import { achievement, eq, issuer, organization, type Queryable } from '@credforge/db';
 import type { FileRow } from '../files/service';
 import { achievementText, issuerText, orgText } from './content';
-import { type ModerationItemRow, type ModerationPolicy, submitImage, submitText } from './service';
+import {
+  type ModerationItemRow,
+  type ModerationPolicy,
+  type ScanQueue,
+  submitImage,
+  submitText,
+} from './service';
 
 /**
  * Called wherever public text or an image is saved (design plan §6.5): records the version for
- * review and points the subject at it, in the caller's transaction.
+ * review and points the subject at it, in the caller's transaction. Pass the job queue so the
+ * automatic check, where one applies, starts in the same transaction (decision 60).
  */
 
 type OrgRef = { id: string; trustedAt: Date | null };
@@ -15,6 +22,7 @@ export async function reviewOrgName(
   policy: ModerationPolicy,
   org: OrgRef & { name: string },
   submittedBy: string | null,
+  jobs?: ScanQueue,
 ): Promise<ModerationItemRow> {
   const item = await submitText(tx, policy, {
     org,
@@ -22,6 +30,7 @@ export async function reviewOrgName(
     subjectId: org.id,
     content: orgText(org),
     submittedBy,
+    jobs,
   });
   await tx.update(organization).set({ nameItemId: item.id }).where(eq(organization.id, org.id));
   return item;
@@ -33,6 +42,7 @@ export async function reviewIssuerText(
   org: OrgRef,
   row: typeof issuer.$inferSelect,
   submittedBy: string | null,
+  jobs?: ScanQueue,
 ): Promise<ModerationItemRow> {
   const item = await submitText(tx, policy, {
     org,
@@ -40,6 +50,7 @@ export async function reviewIssuerText(
     subjectId: row.id,
     content: issuerText(row),
     submittedBy,
+    jobs,
   });
   if (row.textItemId !== item.id) {
     await tx.update(issuer).set({ textItemId: item.id }).where(eq(issuer.id, row.id));
@@ -53,6 +64,7 @@ export async function reviewAchievementText(
   org: OrgRef,
   row: typeof achievement.$inferSelect,
   submittedBy: string | null,
+  jobs?: ScanQueue,
 ): Promise<ModerationItemRow> {
   const item = await submitText(tx, policy, {
     org,
@@ -60,6 +72,7 @@ export async function reviewAchievementText(
     subjectId: row.id,
     content: achievementText(row),
     submittedBy,
+    jobs,
   });
   if (row.textItemId !== item.id) {
     await tx.update(achievement).set({ textItemId: item.id }).where(eq(achievement.id, row.id));
@@ -74,6 +87,7 @@ export function reviewImage(
   org: OrgRef,
   image: FileRow,
   submittedBy: string | null,
+  jobs?: ScanQueue,
 ): Promise<ModerationItemRow> {
   return submitImage(tx, policy, {
     org,
@@ -81,5 +95,6 @@ export function reviewImage(
     subjectId: image.subjectId ?? '',
     file: image,
     submittedBy,
+    jobs,
   });
 }

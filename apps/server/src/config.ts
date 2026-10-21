@@ -1,9 +1,17 @@
-import { createPublicKey } from 'node:crypto';
+import { createPublicKey, type KeyObject } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { SIGNUP_MODES, type SignupMode } from '@credforge/contracts';
 import { z } from 'zod';
 import { type Blocklist, parseBlocklist } from './moderation/blocklist';
+import { EvidenceError, parseEvidencePublicKey } from './moderation/evidence';
+import { OPENAI_DEFAULT_MODEL } from './moderation/scan-openai';
+import {
+  DEFAULT_HOLD_THRESHOLD,
+  parseCategoryThresholds,
+  ThresholdError,
+  type Thresholds,
+} from './moderation/thresholds';
 
 /**
  * Defaults applied only when NODE_ENV=development, so `pnpm dev` works with no setup.
@@ -37,6 +45,80 @@ const NON_PRODUCTION_SECRETS = {
  */
 export const MODERATION_REVIEW_MODES = ['untrusted', 'all', 'off'] as const;
 export type ModerationReviewMode = (typeof MODERATION_REVIEW_MODES)[number];
+
+/**
+ * The automatic check (design plan §6.5, decision 60): the classifier that scores new images and
+ * public text (`none` by default), and the known-CSAM hash matcher (`none` by default; an adapter
+ * of the operator's behind the webhook, since those services need vetted access).
+ */
+export const MODERATION_PROVIDERS = ['none', 'webhook', 'openai'] as const;
+export type ModerationProvider = (typeof MODERATION_PROVIDERS)[number];
+export const CSAM_MATCHERS = ['none', 'webhook'] as const;
+
+const SCAN_KINDS = ['images', 'text'] as const;
+
+/** `images,text` (the default), `images` or `text`: what the classifier checks. */
+const scanKinds = z
+  .string()
+  .trim()
+  .default('images,text')
+  .transform((value, ctx) => {
+    const kinds = value
+      .split(',')
+      .map((part) => part.trim().toLowerCase())
+      .filter(Boolean);
+    const unknown = kinds.filter((kind) => !(SCAN_KINDS as readonly string[]).includes(kind));
+    if (unknown.length > 0 || kinds.length === 0) {
+      ctx.addIssue({ code: 'custom', message: 'must be images, text, or images,text' });
+      return z.NEVER;
+    }
+    return { images: kinds.includes('images'), text: kinds.includes('text') };
+  });
+
+const webhookUrl = z
+  .string()
+  .trim()
+  .refine((value) => {
+    try {
+      const url = new URL(value);
+      return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username;
+    } catch {
+      return false;
+    }
+  }, 'must be an https:// URL (without credentials in it)');
+
+const webhookSecret = z
+  .string()
+  .trim()
+  .min(32, 'must be at least 32 characters, e.g. the output of `openssl rand -hex 32`');
+
+const scoreThreshold = z.coerce
+  .number({ error: 'must be a number above 0 and at most 1' })
+  .gt(0, 'must be above 0')
+  .max(1, 'must be at most 1');
+
+const categoryThresholds = z
+  .string()
+  .optional()
+  .transform((value, ctx) => {
+    try {
+      return parseCategoryThresholds(value);
+    } catch (error) {
+      if (!(error instanceof ThresholdError)) throw error;
+      ctx.addIssue({ code: 'custom', message: error.message });
+      return z.NEVER;
+    }
+  });
+
+const evidencePublicKey = z.string().transform((value, ctx) => {
+  try {
+    return parseEvidencePublicKey(value);
+  } catch (error) {
+    if (!(error instanceof EvidenceError)) throw error;
+    ctx.addIssue({ code: 'custom', message: error.message });
+    return z.NEVER;
+  }
+});
 
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -191,6 +273,21 @@ const envSchema = z
       .int('must be a whole number')
       .min(0, 'must be 0 (no limit) or more')
       .default(10),
+    MODERATION_PROVIDER: z.enum(MODERATION_PROVIDERS).default('none'),
+    MODERATION_SCAN: scanKinds,
+    MODERATION_WEBHOOK_URL: webhookUrl.optional(),
+    MODERATION_WEBHOOK_SECRET: webhookSecret.optional(),
+    MODERATION_WEBHOOK_NAME: z.string().trim().min(1).max(200).optional(),
+    MODERATION_OPENAI_API_KEY: z.string().trim().optional(),
+    MODERATION_OPENAI_MODEL: z.string().trim().min(1).default(OPENAI_DEFAULT_MODEL),
+    MODERATION_HOLD_THRESHOLD: scoreThreshold.default(DEFAULT_HOLD_THRESHOLD),
+    MODERATION_REMOVE_THRESHOLD: scoreThreshold.optional(),
+    MODERATION_CATEGORY_THRESHOLDS: categoryThresholds,
+    CSAM_MATCHER: z.enum(CSAM_MATCHERS).default('none'),
+    CSAM_MATCHER_URL: webhookUrl.optional(),
+    CSAM_MATCHER_SECRET: webhookSecret.optional(),
+    CSAM_MATCHER_NAME: z.string().trim().min(1).max(200).optional(),
+    CSAM_EVIDENCE_PUBLIC_KEY: evidencePublicKey.optional(),
     ABUSE_EMAIL: z.email('must be an email address').optional(),
     PRIVACY_EMAIL: z.email('must be an email address').optional(),
     SECURITY_EMAIL: z.email('must be an email address').optional(),
@@ -291,7 +388,67 @@ const envSchema = z
         });
       }
     }
+    const require = (name: keyof typeof env, when: string) => {
+      if (env[name] === undefined) {
+        ctx.addIssue({ code: 'custom', path: [name], message: `is required for ${when}` });
+      }
+    };
+    if (env.MODERATION_PROVIDER === 'webhook') {
+      for (const name of [
+        'MODERATION_WEBHOOK_URL',
+        'MODERATION_WEBHOOK_SECRET',
+        'MODERATION_WEBHOOK_NAME',
+      ] as const) {
+        require(name, 'MODERATION_PROVIDER=webhook');
+      }
+    }
+    if (env.MODERATION_PROVIDER === 'openai') {
+      require('MODERATION_OPENAI_API_KEY', 'MODERATION_PROVIDER=openai');
+    }
+    if (env.CSAM_MATCHER === 'webhook') {
+      for (const name of [
+        'CSAM_MATCHER_URL',
+        'CSAM_MATCHER_SECRET',
+        'CSAM_MATCHER_NAME',
+      ] as const) {
+        require(name, 'CSAM_MATCHER=webhook');
+      }
+    }
+    if (env.CSAM_MATCHER !== 'none') {
+      require('CSAM_EVIDENCE_PUBLIC_KEY', 'CSAM_MATCHER (matches are kept as sealed evidence)');
+    }
+    if (
+      env.MODERATION_REMOVE_THRESHOLD !== undefined &&
+      env.MODERATION_REMOVE_THRESHOLD < env.MODERATION_HOLD_THRESHOLD
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MODERATION_REMOVE_THRESHOLD'],
+        message: 'must be at least MODERATION_HOLD_THRESHOLD',
+      });
+    }
+    // Content goes to these URLs: over https, unless to a service on the same private network.
+    for (const name of ['MODERATION_WEBHOOK_URL', 'CSAM_MATCHER_URL'] as const) {
+      const value = env[name];
+      if (production && value && !value.startsWith('https://') && !internalHost(value)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [name],
+          message:
+            'must use https:// in production (http:// only to a host on a private network, such as a compose service)',
+        });
+      }
+    }
   });
+
+/** A compose service name, localhost, or an address in a private range: http:// is allowed. */
+function internalHost(value: string): boolean {
+  const { hostname } = new URL(value);
+  if (!hostname.includes('.') || LOCAL_HOSTNAMES.has(hostname)) return true;
+  return /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|127\.)\d{1,3}\.\d{1,3}(?:\.\d{1,3})?$/.test(
+    hostname,
+  );
+}
 
 /** A sender: `awards@credforge.app` or `credforge <awards@credforge.app>`. */
 export interface Mailbox {
@@ -312,6 +469,25 @@ export function parseMailbox(value: string): Mailbox | undefined {
   }
   return ADDRESS.test(trimmed) ? { address: trimmed } : undefined;
 }
+
+/** A signed webhook (docs/moderation-webhooks.md). `name` is who runs it, for the privacy policy. */
+export interface WebhookEndpoint {
+  url: string;
+  secret: string;
+  name: string;
+}
+
+export type ScannerConfig =
+  | { provider: 'none' }
+  | ({ provider: 'webhook'; images: boolean; text: boolean } & WebhookEndpoint)
+  | {
+      provider: 'openai';
+      name: 'OpenAI';
+      images: boolean;
+      text: boolean;
+      apiKey: string;
+      model: string;
+    };
 
 export type StorageConfig =
   | { driver: 'local'; localDir: string }
@@ -376,6 +552,20 @@ export interface Config {
     review: ModerationReviewMode;
     /** The operator's word list (MODERATION_TEXT_BLOCKLIST or its _FILE); empty when unset. */
     blocklist: Blocklist;
+    /**
+     * What new content waits for the automatic check before it can be published (decision 60):
+     * images with a classifier that checks them or a known-CSAM matcher, text with a classifier
+     * that checks it. Both false with neither set up.
+     */
+    scan: { images: boolean; text: boolean };
+    /** The classifier (MODERATION_PROVIDER). */
+    scanner: ScannerConfig;
+    /** When the classifier's scores hold or remove an item. */
+    thresholds: Thresholds;
+    /** Known-CSAM hash matching (CSAM_MATCHER). */
+    csamMatcher: { kind: 'none' } | ({ kind: 'webhook' } & WebhookEndpoint);
+    /** Seals known-CSAM evidence (CSAM_EVIDENCE_PUBLIC_KEY); required with a matcher. */
+    evidencePublicKey?: KeyObject;
   };
   /** Image and CSV uploads per org per hour, unless a platform admin set the org's own; 0 = no limit. */
   orgUploadRateLimit: number;
@@ -486,10 +676,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     apiRateLimit: env.API_RATE_LIMIT,
     claimRateLimit: env.CLAIM_RATE_LIMIT,
     authRateLimit: env.AUTH_RATE_LIMIT ?? env.NODE_ENV === 'production',
-    moderation: {
-      review: env.MODERATION_REVIEW,
-      blocklist: parseBlocklist(env.MODERATION_TEXT_BLOCKLIST),
-    },
+    moderation: moderationConfig(env),
     orgUploadRateLimit: env.ORG_UPLOAD_RATE_LIMIT,
     orgStorageQuotaMb: env.ORG_STORAGE_QUOTA_MB,
     reportRateLimit: env.REPORT_RATE_LIMIT,
@@ -534,6 +721,55 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     },
     requireMfaForAdmins: env.REQUIRE_MFA_FOR_ADMINS,
     signupMode: env.SIGNUP_MODE,
+  };
+}
+
+function moderationConfig(env: z.infer<typeof envSchema>): Config['moderation'] {
+  // Required fields are checked above, in the schema's refinement.
+  const kinds = env.MODERATION_SCAN;
+  const scanner: ScannerConfig =
+    env.MODERATION_PROVIDER === 'webhook'
+      ? {
+          provider: 'webhook',
+          ...kinds,
+          url: env.MODERATION_WEBHOOK_URL as string,
+          secret: env.MODERATION_WEBHOOK_SECRET as string,
+          name: env.MODERATION_WEBHOOK_NAME as string,
+        }
+      : env.MODERATION_PROVIDER === 'openai'
+        ? {
+            provider: 'openai',
+            name: 'OpenAI',
+            ...kinds,
+            apiKey: env.MODERATION_OPENAI_API_KEY as string,
+            model: env.MODERATION_OPENAI_MODEL,
+          }
+        : { provider: 'none' };
+  const csamMatcher: Config['moderation']['csamMatcher'] =
+    env.CSAM_MATCHER === 'webhook'
+      ? {
+          kind: 'webhook',
+          url: env.CSAM_MATCHER_URL as string,
+          secret: env.CSAM_MATCHER_SECRET as string,
+          name: env.CSAM_MATCHER_NAME as string,
+        }
+      : { kind: 'none' };
+  const classifies = scanner.provider !== 'none';
+  return {
+    review: env.MODERATION_REVIEW,
+    blocklist: parseBlocklist(env.MODERATION_TEXT_BLOCKLIST),
+    scan: {
+      images: (classifies && kinds.images) || csamMatcher.kind !== 'none',
+      text: classifies && kinds.text,
+    },
+    scanner,
+    thresholds: {
+      hold: env.MODERATION_HOLD_THRESHOLD,
+      remove: env.MODERATION_REMOVE_THRESHOLD ?? null,
+      categories: env.MODERATION_CATEGORY_THRESHOLDS,
+    },
+    csamMatcher,
+    evidencePublicKey: env.CSAM_EVIDENCE_PUBLIC_KEY,
   };
 }
 

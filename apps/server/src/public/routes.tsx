@@ -33,6 +33,7 @@ function sendHtml(reply: FastifyReply, html: string) {
 /** What the privacy policy and terms can say for sure about this instance (its configuration). */
 export function legalFacts(config: PublicPagesOptions['config']): LegalFacts {
   const storage = config.storage;
+  const { scanner, csamMatcher } = config.moderation;
   const onSpaces =
     storage.driver === 's3' && (storage.endpoint ?? '').includes('digitaloceanspaces.com');
   return {
@@ -55,6 +56,20 @@ export function legalFacts(config: PublicPagesOptions['config']): LegalFacts {
     moderation: {
       review: config.moderation.review,
       blocklist: config.moderation.blocklist.terms.length > 0,
+      scanner:
+        scanner.provider === 'none'
+          ? null
+          : {
+              name: scanner.name,
+              images: scanner.images,
+              text: scanner.text,
+              removes:
+                config.moderation.thresholds.remove !== null ||
+                Object.values(config.moderation.thresholds.categories).some(
+                  (category) => typeof category.remove === 'number',
+                ),
+            },
+      csamMatcher: csamMatcher.kind === 'none' ? null : csamMatcher.name,
     },
   };
 }

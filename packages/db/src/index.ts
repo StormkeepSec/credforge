@@ -24,7 +24,13 @@ export {
   type SQL,
   sql,
 } from 'drizzle-orm';
-export { APPEND_ONLY_TABLES, type AppRoleOptions, connectionUser, grantAppRole } from './app-role';
+export {
+  APPEND_ONLY_TABLES,
+  type AppRoleOptions,
+  connectionUser,
+  grantAppRole,
+  WRITE_ONLY_COLUMNS,
+} from './app-role';
 export * from './schema';
 
 export interface DatabaseOptions {

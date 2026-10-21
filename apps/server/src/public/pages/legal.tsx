@@ -33,7 +33,19 @@ export interface LegalFacts {
   moderation: {
     review: 'untrusted' | 'all' | 'off';
     blocklist: boolean;
+    /**
+     * The automatic check (decision 60): who it sends content to, what it checks, and whether
+     * it removes content at once. Null when none is set up.
+     */
+    scanner: { name: string; images: boolean; text: boolean; removes: boolean } | null;
+    /** Who compares images with lists of known child sexual abuse material; null: nobody. */
+    csamMatcher: string | null;
   };
+}
+
+/** "images and public text", "images" or "public text": what the automatic check reads. */
+function scanned(scanner: { images: boolean; text: boolean }): string {
+  return [scanner.images && 'images', scanner.text && 'public text'].filter(Boolean).join(' and ');
 }
 
 const LAST_UPDATED = '21 October 2026';
@@ -317,9 +329,21 @@ export function PrivacyPage({
           {facts.moderation.blocklist
             ? 'Text that matches a list of words the people who run this site keep is held for them to review. '
             : ''}
+          {facts.moderation.scanner &&
+            `Before they are shown publicly, organizations’ ${scanned(facts.moderation.scanner)} ${facts.moderation.scanner.images && facts.moderation.scanner.text ? 'are' : 'is'} checked automatically by ${facts.moderation.scanner.name}, which rates how likely it is to be sexual, violent, hateful or otherwise against the terms; what it rates highly is held for review${facts.moderation.scanner.removes ? ', or removed at once' : ''}. `}
           They may hold or remove content that is reported or breaks the terms, and they see who
           uploaded it.
         </p>
+        {facts.moderation.csamMatcher && (
+          <p>
+            Uploaded images are compared with lists of known child sexual abuse material by{' '}
+            {facts.moderation.csamMatcher}. An image that matches is blocked at once and never
+            shown, the organization is suspended and the account that uploaded it disabled, and the
+            image and what we know about its upload (the account, the organization, when, from which
+            IP address and browser) are kept encrypted as evidence. We report such material to the
+            authorities where the law requires it.
+          </p>
+        )}
       </Section>
 
       <Section title="If you report a problem">
@@ -380,6 +404,19 @@ export function PrivacyPage({
               <strong>Microsoft</strong>, when you choose to sign in with Microsoft.
             </li>
           )}
+          {facts.moderation.scanner && (
+            <li>
+              <strong>{facts.moderation.scanner.name}</strong> checks the{' '}
+              {scanned(facts.moderation.scanner)} organizations publish, before they are shown: we
+              send it the content, never who uploaded it.
+            </li>
+          )}
+          {facts.moderation.csamMatcher && (
+            <li>
+              <strong>{facts.moderation.csamMatcher}</strong> compares uploaded images with lists of
+              known child sexual abuse material.
+            </li>
+          )}
         </ul>
         <p>
           <ToFill>
@@ -411,6 +448,13 @@ export function PrivacyPage({
             <strong>Server logs</strong> (IP address and the page requested, with links’ secret
             parts removed) are kept for <ToFill>how long</ToFill>.
           </li>
+          {facts.moderation.csamMatcher && (
+            <li>
+              <strong>Evidence of child sexual abuse material</strong> is kept encrypted for as long
+              as the law requires (in the United States, at least a year after it is reported):{' '}
+              <ToFill>how long, where this site operates</ToFill>.
+            </li>
+          )}
           <li>
             <strong>Accounts</strong>, and the addresses you added to them (until you remove them),
             are kept until you ask us to delete yours.{' '}
@@ -570,10 +614,15 @@ export function TermsPage({
         <p>
           We may hold an organization’s images and text for review before they are shown, remove
           them, unpublish achievements, disable accounts, and suspend an organization that breaks
-          these terms. A suspended organization can’t award or email badges. Badges it awarded
-          earlier stay checkable unless they are revoked, which we may do for badges that are
-          fraudulent or abusive. We tell the organization’s owners what we did and why; to appeal,
-          reply to that email.
+          these terms.
+          {facts.moderation.scanner &&
+            ` Images and text may be checked automatically before they are shown${facts.moderation.scanner.removes ? ', and what the check rates as very likely to break these terms is removed at once' : ''}.`}
+          {facts.moderation.csamMatcher &&
+            ' An image that matches known child sexual abuse material is blocked at once and the organization suspended; we report it to the authorities where the law requires it.'}{' '}
+          A suspended organization can’t award or email badges. Badges it awarded earlier stay
+          checkable unless they are revoked, which we may do for badges that are fraudulent or
+          abusive. We tell the organization’s owners what we did and why; to appeal, reply to that
+          email.
         </p>
         <p>
           You may stop using the service at any time.{' '}

@@ -72,7 +72,7 @@ export const userOrgRoutes: FastifyPluginAsync<{ services: Services }> = async (
         })
         .returning();
       if (!org) throw new Error('Insert returned no row.');
-      await reviewOrgName(tx, config.moderation, org, actor.user.id);
+      await reviewOrgName(tx, config.moderation, org, actor.user.id, services.jobs);
       const [owner] = await tx
         .insert(member)
         .values({ orgId: org.id, userId: actor.user.id, role: 'owner' })
@@ -138,6 +138,7 @@ export const orgRoutes: FastifyPluginAsync<{ services: Services }> = async (app,
           config.moderation,
           { ...access.org, name: input.name },
           access.userId,
+          services.jobs,
         );
         await recordAudit(tx, {
           orgId: access.org.id,

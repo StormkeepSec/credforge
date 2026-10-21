@@ -258,6 +258,7 @@ const moderationOrgSchema = z.object({
   trusted: z.boolean(),
 });
 const decidedBySchema = nullable(z.object({ name: z.string(), email: z.string() }));
+const categoryScoreSchema = z.object({ category: z.string(), score: z.number().min(0).max(1) });
 
 export const moderationItemSchema = z
   .object({
@@ -266,11 +267,13 @@ export const moderationItemSchema = z
     status: moderationStatus,
     flags: z.array(
       z.object({
-        source: z.enum(['review', 'blocklist', 'report']),
+        source: z.enum(['review', 'blocklist', 'report', 'scan', 'hash_match']),
         at: dateTime,
         terms: nullable(z.array(z.string())),
         reportId: nullable(z.uuid()),
         category: nullable(z.enum(REPORT_CATEGORIES)),
+        provider: nullable(z.string()),
+        scores: nullable(z.array(categoryScoreSchema)),
       }),
     ),
     org: moderationOrgSchema,
@@ -289,6 +292,18 @@ export const moderationItemSchema = z
         height: nullable(z.number().int()),
       }),
     ),
+    scan: nullable(
+      z.object({
+        status: z.enum(['waiting', 'done', 'failed']),
+        scannedAt: nullable(dateTime),
+        provider: nullable(z.string()),
+        scores: z.array(categoryScoreSchema),
+        hashChecked: z.boolean(),
+        error: nullable(z.string()),
+      }),
+    ),
+    withheld: nullable(z.enum(['known_csam', 'awaiting_check'])),
+    evidenceId: nullable(z.uuid()),
     heldCredentials: z.number().int(),
     submittedBy: nullable(moderationUserSchema),
     submittedAt: dateTime,
@@ -330,7 +345,18 @@ export const contentReportPageSchema = z
   .meta({ id: 'ContentReportPage' });
 
 export const moderationSummarySchema = z
-  .object({ pendingItems: z.number().int(), openReports: z.number().int() })
+  .object({
+    pendingItems: z.number().int(),
+    openReports: z.number().int(),
+    scanning: z.object({
+      provider: nullable(z.string()),
+      images: z.boolean(),
+      text: z.boolean(),
+      csamMatcher: nullable(z.string()),
+      waiting: z.number().int(),
+      failed: z.number().int(),
+    }),
+  })
   .meta({ id: 'ModerationSummary' });
 
 const alignmentSchema = z.object({

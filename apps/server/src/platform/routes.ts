@@ -207,6 +207,8 @@ export const platformRoutes: FastifyPluginAsync<{ services: Services }> = async 
               eq(moderationItem.orgId, orgId),
               inArray(moderationItem.id, clearItemIds),
               eq(moderationItem.status, 'pending'),
+              // Its automatic check hasn't run: it wasn't shown, and the check may clear it itself.
+              sql`${moderationItem.scanStatus} is distinct from 'waiting'`,
             ),
           );
         const cleared = await decideItems(

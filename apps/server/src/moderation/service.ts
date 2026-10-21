@@ -26,7 +26,17 @@ import { type SubjectText, textHash, textValues } from './content';
 export type ModerationItemRow = typeof moderationItem.$inferSelect;
 export type ModerationStatus = ModerationItemRow['status'];
 export type SubjectType = ModerationItemRow['subjectType'];
-export type ModerationPolicy = Config['moderation'];
+/**
+ * What submitting content needs to know: the review policy, the word list, and what waits for the
+ * automatic check (decision 60; leave `scan` out where nothing is scanned, as in the backfill).
+ */
+export type ModerationPolicy = Pick<Config['moderation'], 'review' | 'blocklist'> &
+  Partial<Pick<Config['moderation'], 'scan'>>;
+
+/** Hands an item's automatic check to the worker (`JobQueue.scanContent`). */
+export interface ScanQueue {
+  scanContent(itemId: string, options?: { tx?: Queryable }): Promise<void>;
+}
 
 /** Whether the org's new content waits for a platform admin under the instance's policy. */
 export function reviewRequired(policy: ModerationPolicy, org: { trustedAt: Date | null }): boolean {
@@ -38,9 +48,26 @@ export interface SubmitInput {
   subjectType: SubjectType;
   subjectId: string;
   submittedBy: string | null;
+  /**
+   * Gets the automatic check started in the same transaction. Without it the worker's sweep finds
+   * the item within a minute (tests run the check themselves).
+   */
+  jobs?: ScanQueue;
 }
 
-function initialState(flags: ModerationFlag[], now: Date) {
+/**
+ * A new item waits for a platform admin when it is flagged, and for the automatic check when one
+ * applies (decision 60): until it has run, nothing is published, whoever the org is.
+ */
+function initialState(flags: ModerationFlag[], now: Date, scan: boolean) {
+  if (scan) {
+    return {
+      status: 'pending' as const,
+      decidedAt: null,
+      decisionNote: null,
+      scanStatus: 'waiting' as const,
+    };
+  }
   return flags.length > 0
     ? { status: 'pending' as const, decidedAt: null, decisionNote: null }
     : { status: 'cleared' as const, decidedAt: now, decisionNote: 'Published without review.' };
@@ -88,13 +115,16 @@ export async function submitText(
       content: input.content as unknown as Record<string, unknown>,
       contentHash,
       flags,
-      ...initialState(flags, now),
+      ...initialState(flags, now, Boolean(policy.scan?.text)),
       submittedBy: input.submittedBy,
       submittedAt: now,
     })
     .onConflictDoNothing()
     .returning();
-  if (row) return row;
+  if (row) {
+    if (row.scanStatus === 'waiting') await input.jobs?.scanContent(row.id, { tx });
+    return row;
+  }
   // Saved twice at once: the other request recorded it first.
   const [raced] = await find();
   if (!raced) throw new Error('Moderation item missing after insert conflict.');
@@ -142,14 +172,19 @@ export async function submitImage(
             status: 'removed' as const,
             decidedAt: now,
             decisionNote: 'The same image was removed before.',
+            // Still checked for known CSAM: a match is evidence, whatever was decided before.
+            ...(policy.scan?.images && { scanStatus: 'waiting' as const }),
           }
-        : initialState(flags, now)),
+        : initialState(flags, now, Boolean(policy.scan?.images))),
       submittedBy: input.submittedBy,
       submittedAt: now,
     })
     .onConflictDoNothing()
     .returning();
-  if (row) return row;
+  if (row) {
+    if (row.scanStatus === 'waiting') await input.jobs?.scanContent(row.id, { tx });
+    return row;
+  }
   const [raced] = await find();
   if (!raced) throw new Error('Moderation item missing after insert conflict.');
   return raced;
@@ -222,6 +257,32 @@ export function contentReview(
  */
 export function statusOf(item: Pick<ModerationItemRow, 'status'> | undefined): ModerationStatus {
   return item?.status ?? 'pending';
+}
+
+/** Whether the item matched known child sexual abuse material (decision 61). */
+export function isHashMatched(item: Pick<ModerationItemRow, 'flags'>): boolean {
+  return item.flags.some((flag) => flag.source === 'hash_match');
+}
+
+/**
+ * Why an image must not be shown to anyone, platform admins and the org's own members included
+ * (decision 61): `known_csam` once it matched (never again), `awaiting_check` while a configured
+ * known-CSAM matcher hasn't checked it. Null: it may be shown as the moderation rules say.
+ */
+export function imageWithheld(
+  item: Pick<ModerationItemRow, 'kind' | 'flags' | 'scanStatus' | 'scanResult'>,
+  hashMatching: boolean,
+): 'known_csam' | 'awaiting_check' | null {
+  if (item.kind !== 'image') return null;
+  if (isHashMatched(item)) return 'known_csam';
+  if (
+    hashMatching &&
+    (item.scanStatus === 'waiting' || item.scanStatus === 'failed') &&
+    item.scanResult?.hashCheck?.matched !== false
+  ) {
+    return 'awaiting_check';
+  }
+  return null;
 }
 
 export interface PublicText<T> {

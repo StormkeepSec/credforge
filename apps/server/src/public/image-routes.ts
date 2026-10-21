@@ -3,7 +3,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { isUuid } from '../api/errors';
 import { type ImageFileKind, parseImageName } from '../files/service';
 import { placeholderPng, placeholderSvg } from '../moderation/placeholders';
-import { imageItems, statusOf } from '../moderation/service';
+import { imageItems, imageWithheld, statusOf } from '../moderation/service';
 import { isOrgMember } from '../moderation/viewer';
 import type { Services } from '../services';
 
@@ -27,12 +27,14 @@ export const IMAGE_CACHE = 'public, max-age=600';
  *
  * Only cleared images are served (§6.5). One waiting for review answers with a neutral
  * placeholder, except to the org's own members (their issuer app shows it); a removed one answers
- * with an "Image removed" placeholder for good, so badges that refer to it still verify.
+ * with an "Image removed" placeholder for good, so badges that refer to it still verify. While a
+ * known-CSAM matcher hasn't checked an image, its members get the placeholder too (decision 61).
  */
 export const publicImageRoutes: FastifyPluginAsync<{
   services: Pick<Services, 'db' | 'storage' | 'auth' | 'config'>;
 }> = async (app, { services }) => {
   const { db, storage } = services;
+  const hashMatching = services.config.moderation.csamMatcher.kind !== 'none';
 
   const serve = (kind: ImageFileKind) => async (request: FastifyRequest, reply: FastifyReply) => {
     const { id, name } = request.params as { id: string; name: string };
@@ -63,8 +65,12 @@ export const publicImageRoutes: FastifyPluginAsync<{
       .header('cross-origin-resource-policy', 'cross-origin')
       .header('access-control-allow-origin', '*');
 
-    const status = statusOf((await imageItems(db, [row.id])).get(row.id));
-    const member = status === 'pending' && (await isOrgMember(services, request, reply, row.orgId));
+    const item = (await imageItems(db, [row.id])).get(row.id);
+    const status = statusOf(item);
+    const member =
+      status === 'pending' &&
+      !(item && imageWithheld(item, hashMatching)) &&
+      (await isOrgMember(services, request, reply, row.orgId));
     if (status !== 'cleared' && !member) {
       const placeholder = status === 'removed' ? 'removed' : 'held';
       // A held image may be cleared any minute: never cache its placeholder.

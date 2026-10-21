@@ -42,9 +42,16 @@ import {
   memberDisabledMessage,
 } from '../email/messages';
 import type { EmailMessage } from '../email/transport';
-import { IN_QUEUE, listItems, serializeItems } from '../moderation/queue';
+import { describeItem, IN_QUEUE, listItems, serializeItems } from '../moderation/queue';
 import { reportTarget } from '../moderation/reports';
-import { decideItems, imageItems, type ModerationItemRow } from '../moderation/service';
+import { recheck } from '../moderation/scan';
+import {
+  decideItems,
+  imageItems,
+  imageWithheld,
+  isHashMatched,
+  type ModerationItemRow,
+} from '../moderation/service';
 import { requestInfo, userActor } from '../orgs/access';
 import { ownerEmails } from '../orgs/service';
 import { UPLOAD_CSP } from '../public/image-routes';
@@ -53,20 +60,40 @@ import { requirePlatformAdmin } from './admin';
 
 const imageQuery = z.object({ view: z.enum(['blurred', 'full']).default('blurred') });
 
-/** How an owners' email names an item: "the badge image of “Intro to Network Defense”". */
-export function describeItem(row: ModerationItemRow, subjectName: string): string {
-  const name =
-    (row.kind === 'text' && typeof row.content?.name === 'string'
-      ? row.content.name
-      : subjectName) || 'unnamed';
-  if (row.kind === 'image') {
-    return row.subjectType === 'achievement'
-      ? `the badge image of “${name}”`
-      : `the logo of “${name}”`;
+/** Known CSAM is never shown or published again (decision 61). */
+function withheldError() {
+  return new ApiError(
+    403,
+    'forbidden',
+    'This image is never shown',
+    'It matches known child sexual abuse material. It was blocked and is kept only as sealed evidence: see the abuse-handling runbook.',
+  );
+}
+
+function refuseWithheld(row: ModerationItemRow, hashMatching: boolean) {
+  const withheld = imageWithheld(row, hashMatching);
+  if (withheld === 'known_csam') throw withheldError();
+  if (withheld === 'awaiting_check') {
+    throw new ApiError(
+      409,
+      'conflict',
+      'Not checked yet',
+      'This image is shown once the check against known child sexual abuse material has passed.',
+    );
   }
-  if (row.subjectType === 'achievement') return `the text of the achievement “${name}”`;
-  if (row.subjectType === 'issuer') return `the profile of the issuer “${name}”`;
-  return `the organization name “${name}”`;
+}
+
+/** Nothing is cleared before its automatic check has run, and known CSAM never is. */
+function refuseUnchecked(row: ModerationItemRow) {
+  if (isHashMatched(row)) throw withheldError();
+  if (row.scanStatus === 'waiting') {
+    throw new ApiError(
+      409,
+      'conflict',
+      'The automatic check hasn’t run yet',
+      'Try again in a moment: content is cleared only after its automatic check.',
+    );
+  }
 }
 
 /**
@@ -83,6 +110,8 @@ export const moderationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
   const { db, config, outbox, storage } = services;
   const base = config.publicBaseUrl;
   const appeal = { abuseEmail: config.abuseEmail };
+  const hashMatching = config.moderation.csamMatcher.kind !== 'none';
+  const scanView = { hashMatching };
   const admin = (request: FastifyRequest, reply: FastifyReply) =>
     requirePlatformAdmin(services, request, reply);
 
@@ -93,7 +122,7 @@ export const moderationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
   }
 
   async function present(row: ModerationItemRow) {
-    const [item] = await serializeItems(db, base, [row]);
+    const [item] = await serializeItems(db, base, [row], scanView);
     if (!item) throw notFound('Item');
     return item;
   }
@@ -112,25 +141,46 @@ export const moderationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       .select({ count: sql<number>`count(*)::int` })
       .from(contentReport)
       .where(eq(contentReport.status, 'open'));
-    return { pendingItems: items?.count ?? 0, openReports: reports?.count ?? 0 };
+    const [scans] = await db
+      .select({
+        waiting: sql<number>`count(*) filter (where ${moderationItem.scanStatus} = 'waiting')::int`,
+        failed: sql<number>`count(*) filter (where ${moderationItem.scanStatus} = 'failed' and ${moderationItem.status} = 'pending')::int`,
+      })
+      .from(moderationItem)
+      .where(sql`${moderationItem.scanStatus} in ('waiting', 'failed')`);
+    const { scanner, csamMatcher } = config.moderation;
+    return {
+      pendingItems: items?.count ?? 0,
+      openReports: reports?.count ?? 0,
+      scanning: {
+        provider: scanner.provider === 'none' ? null : scanner.name,
+        images: scanner.provider !== 'none' && scanner.images,
+        text: scanner.provider !== 'none' && scanner.text,
+        csamMatcher: csamMatcher.kind === 'none' ? null : csamMatcher.name,
+        waiting: scans?.waiting ?? 0,
+        failed: scans?.failed ?? 0,
+      },
+    };
   });
 
   app.get('/moderation/items', async (request, reply): Promise<ModerationItemPage> => {
     await admin(request, reply);
     const query = parse(moderationItemsQuery, request.query);
     const { rows, next } = await listItems(db, query);
-    return { items: await serializeItems(db, base, rows), next };
+    return { items: await serializeItems(db, base, rows, scanView), next };
   });
 
   /**
    * An image item, for a platform admin's eyes only: the 512 px PNG (never the original, so no
    * SVG runs here), blurred beyond recognition unless `view=full`. No-store and inline, never an
-   * attachment.
+   * attachment. Never an image that matched known CSAM (decision 61), nor one the known-CSAM
+   * matcher hasn't checked yet.
    */
   app.get('/moderation/items/:itemId/image', async (request, reply) => {
     await admin(request, reply);
     const row = await loadItem(uuidParam((request.params as { itemId?: string }).itemId, 'Item'));
     if (row.kind !== 'image' || !row.fileId) throw notFound('Image');
+    refuseWithheld(row, hashMatching);
     const [stored] = await db.select().from(file).where(eq(file.id, row.fileId));
     const key = stored?.variants['512']?.key;
     const bytes = key ? await storage.get(key) : null;
@@ -159,6 +209,12 @@ export const moderationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
     const { note } = parse(moderationClearInput, request.body);
     const row = await loadItem(itemId);
     const [changed] = await db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(moderationItem)
+        .where(eq(moderationItem.id, itemId))
+        .for('update');
+      if (current) refuseUnchecked(current);
       const rows = await decideItems(tx, [itemId], 'cleared', {
         userId: actor.user.id,
         note: note ?? null,
@@ -225,6 +281,46 @@ export const moderationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
       );
     }
     return item;
+  });
+
+  /**
+   * Checks an item again (one whose check gave up, or after the scanner was fixed): it waits for
+   * its check, and the queue shows it again once the check has run.
+   */
+  app.post('/moderation/items/:itemId/recheck', async (request, reply) => {
+    const actor = await admin(request, reply);
+    const itemId = uuidParam((request.params as { itemId?: string }).itemId, 'Item');
+    const row = await loadItem(itemId);
+    const { scan } = config.moderation;
+    if (!(row.kind === 'image' ? scan.images : scan.text)) {
+      throw new ApiError(
+        409,
+        'conflict',
+        'No automatic check is set up',
+        'Set up a scanner first.',
+      );
+    }
+    if (isHashMatched(row)) throw withheldError();
+    if (row.status !== 'pending' || row.scanStatus === 'waiting') {
+      throw new ApiError(
+        409,
+        'conflict',
+        'Not possible in this state',
+        row.scanStatus === 'waiting'
+          ? 'Its check is already waiting to run.'
+          : 'Only items waiting for review can be checked again.',
+      );
+    }
+    await recheck({ db, jobs: services.jobs }, row);
+    await recordAudit(db, {
+      orgId: row.orgId,
+      actor: userActor(actor),
+      action: 'moderation.recheck_requested',
+      target: { type: 'moderation_item', id: row.id },
+      data: { kind: row.kind, from: row.scanStatus },
+      request: requestInfo(request),
+    });
+    return present(await loadItem(itemId));
   });
 
   async function loadAchievement(request: FastifyRequest) {
@@ -470,7 +566,7 @@ export const moderationRoutes: FastifyPluginAsync<{ services: Services }> = asyn
           status: org?.status ?? 'pending',
           trusted: Boolean(org?.trustedAt),
         },
-        items: await serializeItems(db, base, items),
+        items: await serializeItems(db, base, items, scanView),
         heldItemIds: row.heldItemIds,
         resolvedAt: row.resolvedAt?.toISOString() ?? null,
         resolvedBy: resolver ? { name: resolver.name, email: resolver.email } : null,

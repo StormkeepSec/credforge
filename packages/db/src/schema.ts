@@ -952,11 +952,41 @@ export const MODERATION_SUBJECT_VALUES = ['organization', 'issuer', 'achievement
  */
 export const MODERATION_STATUS_VALUES = ['pending', 'cleared', 'removed'] as const;
 
-/** Why an item is (or was) held: the review policy, the operator's word list, or a report. */
+/**
+ * Why an item is (or was) held: the review policy, the operator's word list, a report, the
+ * automatic check (the categories at or over the operator's thresholds, with their scores), or a
+ * match in a list of known child sexual abuse material (decisions 60–61).
+ */
 export type ModerationFlag =
   | { source: 'review'; at: string }
   | { source: 'blocklist'; at: string; terms: string[] }
-  | { source: 'report'; at: string; reportId: string; category: string };
+  | { source: 'report'; at: string; reportId: string; category: string }
+  | { source: 'scan'; at: string; provider: string; categories: Record<string, number> }
+  | { source: 'hash_match'; at: string; matcher: string; evidenceId: string };
+
+/**
+ * The automatic check of an item (design plan §6.5, decision 60): `waiting` until the worker has
+ * run it (the item stays pending meanwhile), `done`, or `failed` after its last attempt (it then
+ * waits for a person).
+ */
+export const SCAN_STATUS_VALUES = ['waiting', 'done', 'failed'] as const;
+
+/** What the automatic check found. */
+export interface ScanResult {
+  /** The known-CSAM hash check (images, when a matcher is set up). */
+  hashCheck?: { matcher: string; matched: boolean; at: string };
+  /** The classifier's scores, 0 to 1 per category (the provider's own names). */
+  classifier?: {
+    provider: string;
+    at: string;
+    scores: Record<string, number>;
+    /** Categories at or over the operator's hold and remove thresholds. */
+    hold: string[];
+    remove: string[];
+  };
+  /** Why the last attempt failed. */
+  error?: string;
+}
 
 /**
  * One version of an org's public content, as it was submitted for review: an uploaded image (a
@@ -989,10 +1019,22 @@ export const moderationItem = pgTable(
     decidedAt: timestamptz('decided_at'),
     decidedBy: uuid('decided_by').references(() => user.id, { onDelete: 'set null' }),
     decisionNote: text('decision_note'),
+    /** The automatic check; null when none applied (no scanner set up when it was saved). */
+    scanStatus: text('scan_status', { enum: SCAN_STATUS_VALUES }),
+    scanAttempts: integer('scan_attempts').notNull().default(0),
+    scannedAt: timestamptz('scanned_at'),
+    scanResult: jsonb('scan_result').$type<ScanResult>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (table) => [
+    index('moderation_item_scan_waiting_idx')
+      .on(table.createdAt)
+      .where(sql`${table.scanStatus} = 'waiting'`),
+    check(
+      'moderation_item_scan_status_check',
+      sql`"scan_status" is null or ${oneOf(table.scanStatus, SCAN_STATUS_VALUES)}`,
+    ),
     index('moderation_item_org_idx').on(table.orgId, table.createdAt),
     index('moderation_item_subject_idx').on(table.subjectType, table.subjectId),
     index('moderation_item_pending_idx')
@@ -1011,6 +1053,48 @@ export const moderationItem = pgTable(
       'moderation_item_shape_check',
       sql`("kind" = 'image' and "file_id" is not null) or ("kind" = 'text' and "content" is not null)`,
     ),
+  ],
+);
+
+export const EVIDENCE_SOURCE_VALUES = ['matcher', 'operator'] as const;
+
+/**
+ * Evidence kept when an image matches known child sexual abuse material (design plan §6.5,
+ * decision 61): the image as stored and what is known about its upload, sealed in `envelope` to
+ * the operator's evidence public key (CSAM_EVIDENCE_PUBLIC_KEY), whose private key never is on the
+ * server. The app's database role may insert rows and read every column but `envelope`, and can't
+ * change or delete them (see `grantAppRole`); a trigger refuses updates for every role. Exported
+ * with `cli.js export-evidence` (as the database owner) and opened offline with the private key.
+ * `source`: the configured matcher, or the operator (`cli.js block-known-csam`, for a match found
+ * outside credforge such as Cloudflare's CSAM Scanning Tool).
+ */
+export const moderationEvidence = pgTable(
+  'moderation_evidence',
+  {
+    id: uuid('id').primaryKey(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organization.id),
+    itemId: uuid('item_id')
+      .notNull()
+      .references(() => moderationItem.id),
+    fileId: uuid('file_id'),
+    /** Hex SHA-256 of the image as stored (the file's content address). */
+    contentSha256: text('content_sha256').notNull(),
+    source: text('source', { enum: EVIDENCE_SOURCE_VALUES }).notNull(),
+    /** The matcher (CSAM_MATCHER_NAME) or what the operator named. */
+    matcher: text('matcher').notNull(),
+    /** `sha256:{hex}` of the public key's DER encoding (SPKI) it was sealed to. */
+    keyFingerprint: text('key_fingerprint').notNull(),
+    envelope: bytea('envelope').notNull(),
+    /** Hex SHA-256 of `envelope`, to check an exported copy against. */
+    envelopeSha256: text('envelope_sha256').notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index('moderation_evidence_org_idx').on(table.orgId, table.createdAt),
+    index('moderation_evidence_item_idx').on(table.itemId),
+    check('moderation_evidence_source_check', oneOf(table.source, EVIDENCE_SOURCE_VALUES)),
   ],
 );
 

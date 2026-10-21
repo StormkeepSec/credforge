@@ -14,6 +14,12 @@ import type { DeliveryTracker } from '../email/tracking';
 import type { EmailMessage, EmailTransport } from '../email/transport';
 import type { Storage } from '../files/storage';
 import { type DomainChecker, recheckVerifiedDomains } from '../issuers/domain';
+import {
+  checkWaitingItems,
+  type ScanDependencies,
+  scanItem,
+  scansToResume,
+} from '../moderation/scan';
 import { listsWaitingToPublish, publishStatusList } from '../status-lists/service';
 import type { JobQueue } from './enqueue';
 import { QUEUES } from './queues';
@@ -33,6 +39,13 @@ const KEYED_QUEUE_OPTIONS = {
 } as const;
 
 /**
+ * The automatic check (design plan §6.5): one job per item, retried with a growing delay (30 s,
+ * 1 min, 2 min, …) while the scanner is unreachable. The check itself gives up after
+ * MAX_SCAN_ATTEMPTS and leaves the item for a platform admin.
+ */
+const SCAN_QUEUE_OPTIONS = { ...KEYED_QUEUE_OPTIONS, retryDelay: 30 } as const;
+
+/**
  * Creates every queue. Runs in `migrate` (so the app can enqueue before the worker has ever
  * started) and again in the worker; both are idempotent.
  */
@@ -41,6 +54,7 @@ export async function createQueues(boss: PgBoss): Promise<void> {
   await boss.createQueue(QUEUES.email, EMAIL_QUEUE_OPTIONS);
   await boss.createQueue(QUEUES.batch, KEYED_QUEUE_OPTIONS);
   await boss.createQueue(QUEUES.statusList, KEYED_QUEUE_OPTIONS);
+  await boss.createQueue(QUEUES.scan, SCAN_QUEUE_OPTIONS);
   await boss.createQueue(QUEUES.sweep, { policy: 'stately' });
 }
 
@@ -62,6 +76,11 @@ export interface JobDependencies {
   deliveryTracker?: DeliveryTracker;
   /** Batches, status lists and the sweep. */
   issuing?: IssuingDependencies;
+  /**
+   * The automatic check of new content (design plan §6.5). Without any scanner, checks that were
+   * still waiting when the operator turned scanning off finish as if nothing was found.
+   */
+  moderation?: ScanDependencies;
 }
 
 /** How long one batch job issues before it hands over to the next (and other batches). */
@@ -70,7 +89,7 @@ const BATCH_BUDGET_MS = 60_000;
 export async function registerJobs(
   boss: PgBoss,
   log: Logger,
-  { emailTransport, deliveryTracker, issuing }: JobDependencies,
+  { emailTransport, deliveryTracker, issuing, moderation }: JobDependencies,
 ): Promise<void> {
   await createQueues(boss);
   await boss.schedule(QUEUES.heartbeat, '*/5 * * * *');
@@ -82,6 +101,23 @@ export async function registerJobs(
   await boss.work<EmailMessage>(QUEUES.email, EMAIL_WORK_OPTIONS, async (jobs) => {
     for (const job of jobs) await sendEmail(job.data, job);
   });
+
+  if (moderation) {
+    await boss.work<{ itemId: string }>(
+      QUEUES.scan,
+      { batchSize: 1, pollingIntervalSeconds: 1 },
+      async ([job]) => {
+        if (!job) return;
+        try {
+          const outcome = await scanItem(moderation, job.data.itemId);
+          log.info({ itemId: job.data.itemId, outcome }, 'content checked');
+        } catch (err) {
+          log.warn({ err, itemId: job.data.itemId }, 'content check failed; it will be retried');
+          throw err;
+        }
+      },
+    );
+  }
 
   if (!issuing) return;
   const { db, storage, jobs } = issuing;
@@ -116,6 +152,12 @@ export async function registerJobs(
   await boss.schedule(QUEUES.sweep, '* * * * *');
   await boss.work(QUEUES.sweep, async () => {
     for (const id of await listsWaitingToPublish(db)) await jobs.publishStatusList(id);
+    if (moderation) {
+      const queued = await checkWaitingItems(db, moderation.config.moderation.scan);
+      if (queued.length > 0)
+        log.info({ items: queued.length }, 'content waiting for review queued for checks');
+      for (const id of [...queued, ...(await scansToResume(db))]) await jobs.scanContent(id);
+    }
     for (const id of await batchesToResume(db)) {
       log.warn({ batchId: id }, 'resuming a batch whose job went missing');
       await jobs.issueBatch(id);
