@@ -1,5 +1,14 @@
 import type { ImageSet } from '@credforge/contracts';
-import { and, eq, type FileVariant, file, inArray, type Queryable } from '@credforge/db';
+import {
+  and,
+  eq,
+  type FileVariant,
+  file,
+  inArray,
+  moderationItem,
+  type Queryable,
+  sql,
+} from '@credforge/db';
 import { type ImageBytes, processImage, type VariantName } from './images';
 import type { Storage } from './storage';
 
@@ -133,7 +142,8 @@ export async function retainFiles(db: Queryable, fileIds: (string | null | undef
 
 /**
  * Deletes files and their objects, except any an issued credential refers to (design plan
- * §5.4: those are never deleted). Returns how many were deleted.
+ * §5.4: those are never deleted) and images a platform admin removed (their record keeps the
+ * same image from being published again, §6.5). Returns how many were deleted.
  */
 export async function deleteFiles(db: Queryable, storage: Storage, rows: FileRow[]) {
   let deleted = 0;
@@ -141,7 +151,13 @@ export async function deleteFiles(db: Queryable, storage: Storage, rows: FileRow
     if (row.retain) continue;
     const [gone] = await db
       .delete(file)
-      .where(and(eq(file.id, row.id), eq(file.retain, false)))
+      .where(
+        and(
+          eq(file.id, row.id),
+          eq(file.retain, false),
+          sql`not exists (select 1 from ${moderationItem} where ${moderationItem.fileId} = ${file.id} and ${moderationItem.status} = 'removed')`,
+        ),
+      )
       .returning({ id: file.id });
     if (!gone) continue;
     for (const key of [row.key, ...Object.values(row.variants).map((variant) => variant.key)]) {

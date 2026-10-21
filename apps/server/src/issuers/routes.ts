@@ -2,9 +2,12 @@ import { type Issuer, issuerInput, updateIssuerInput } from '@credforge/contract
 import { and, asc, eq, issuer } from '@credforge/db';
 import type { FastifyPluginAsync } from 'fastify';
 import { notFound, parse, uuidParam } from '../api/errors';
+import type { RateLimiter } from '../api/rate-limit';
 import { acceptImageUploads, storeUploadedImage, UPLOAD_ROUTE_OPTIONS } from '../api/uploads';
 import { recordAudit } from '../audit/audit';
 import { deleteFiles, loadFiles } from '../files/service';
+import { loadReviews } from '../moderation/service';
+import { reviewImage, reviewIssuerText } from '../moderation/subjects';
 import { requestInfo, requirePermission, requireWritable } from '../orgs/access';
 import type { Services } from '../services';
 import { checkDomain, createDomainChecker, domainChanges, startDomainVerification } from './domain';
@@ -26,10 +29,11 @@ function changes(before: IssuerRow, after: IssuerRow) {
 }
 
 /** `/api/v1/orgs/:orgId/issuers`: the org's issuer profiles (OB `Profile`s) and their keys. */
-export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
-  app,
-  { services },
-) => {
+export const issuerRoutes: FastifyPluginAsync<{
+  services: Services;
+  /** Uploads per org (shared by every upload route). */
+  uploadLimiter: RateLimiter;
+}> = async (app, { services, uploadLimiter }) => {
   const { db, keys, config, storage } = services;
   const domains =
     services.domains ?? createDomainChecker(`credforge-domain-check (+${config.publicBaseUrl})`);
@@ -46,6 +50,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
       row,
       await keysForIssuers(db, orgId, [row.id]),
       await loadFiles(db, [row.imageFileId]),
+      await loadReviews(db, [row]),
     );
   }
 
@@ -65,8 +70,11 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
       db,
       rows.map((row) => row.imageFileId),
     );
+    const reviews = await loadReviews(db, rows);
     return {
-      issuers: rows.map((row) => serializeIssuer(config.publicBaseUrl, row, issuerKeys, files)),
+      issuers: rows.map((row) =>
+        serializeIssuer(config.publicBaseUrl, row, issuerKeys, files, reviews),
+      ),
     };
   });
 
@@ -88,6 +96,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
         })
         .returning();
       if (!row) throw new Error('Insert returned no row.');
+      await reviewIssuerText(tx, config.moderation, access.org, row, access.userId);
       const key = await createSigningKey(tx, keys, { orgId: access.org.id, issuerId: row.id });
       // Fails the whole creation if the stored key doesn't decrypt to a working signer.
       await loadSigner(keys, config.publicBaseUrl, key);
@@ -148,6 +157,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
         .where(and(eq(issuer.orgId, access.org.id), eq(issuer.id, issuerId)))
         .returning();
       if (!after) throw notFound('Issuer');
+      await reviewIssuerText(tx, config.moderation, access.org, after, access.userId);
       const diff = changes(before, after);
       if (Object.keys(diff).length > 0) {
         await recordAudit(tx, {
@@ -167,7 +177,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
    * Sets the issuer's logo: the image file itself as the body (PNG, SVG, JPEG or WebP, up to
    * 2 MB). Badges awarded from now on carry it; earlier badges keep the logo they were signed with.
    */
-  app.put('/issuers/:issuerId/logo', UPLOAD_ROUTE_OPTIONS, async (request) => {
+  app.put('/issuers/:issuerId/logo', UPLOAD_ROUTE_OPTIONS, async (request, reply) => {
     const access = requirePermission(request, 'issuer:update');
     requireWritable(access);
     const issuerId = uuidParam((request.params as { issuerId?: string }).issuerId, 'Issuer');
@@ -177,12 +187,18 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
       .where(and(eq(issuer.orgId, access.org.id), eq(issuer.id, issuerId)));
     if (!current) throw notFound('Issuer');
 
-    const logo = await storeUploadedImage(db, storage, request, {
-      orgId: access.org.id,
-      kind: 'issuer_logo',
-      subjectId: issuerId,
-      createdBy: access.userId,
-    });
+    const logo = await storeUploadedImage(
+      db,
+      storage,
+      request,
+      {
+        orgId: access.org.id,
+        kind: 'issuer_logo',
+        subjectId: issuerId,
+        createdBy: access.userId,
+      },
+      { config, limiter: uploadLimiter, org: access.org, reply },
+    );
     const replaced = await db.transaction(async (tx) => {
       const [before] = await tx
         .select({ imageFileId: issuer.imageFileId })
@@ -190,6 +206,7 @@ export const issuerRoutes: FastifyPluginAsync<{ services: Services }> = async (
         .where(and(eq(issuer.orgId, access.org.id), eq(issuer.id, issuerId)))
         .for('update');
       if (!before) throw notFound('Issuer');
+      await reviewImage(tx, config.moderation, access.org, logo, access.userId);
       if (before.imageFileId === logo.id) return null;
       await tx
         .update(issuer)

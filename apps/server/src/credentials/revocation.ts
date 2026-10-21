@@ -247,3 +247,43 @@ export async function reissueCredential(
   forgetVerification(credentialId);
   return id;
 }
+
+/**
+ * Abuse (design plan §6.3, §6.5): revokes every badge a suspended org awarded, 500 at a time,
+ * each with its audit event. The worker re-signs the changed status lists (the CLI, which has no
+ * job queue, publishes them itself). Returns how many were revoked.
+ */
+export async function revokeAllOrgCredentials(
+  services: RevocationServices,
+  orgId: string,
+  details: { reason: string; publicReason: string | null },
+  actor: AuditActor,
+  request: RequestInfo,
+): Promise<number> {
+  const [org] = await services.db
+    .select({ status: organization.status })
+    .from(organization)
+    .where(eq(organization.id, orgId));
+  if (!org) throw notFound('Organization');
+  if (org.status !== 'suspended') {
+    throw new ApiError(
+      409,
+      'conflict',
+      'Suspend the organization first',
+      'Only a suspended organization’s badges can all be revoked at once.',
+    );
+  }
+  const issued = and(eq(credential.orgId, orgId), eq(credential.status, 'issued'));
+  let revoked = 0;
+  for (;;) {
+    const ids = (
+      await services.db.select({ id: credential.id }).from(credential).where(issued).limit(500)
+    ).map((row) => row.id);
+    if (ids.length === 0) break;
+    const result = await revokeCredentials(services, orgId, ids, details, actor, request);
+    revoked += result.revoked.length;
+    // Rows revoked meanwhile by someone else are skipped; nothing left to do then.
+    if (result.revoked.length === 0) break;
+  }
+  return revoked;
+}

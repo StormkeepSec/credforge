@@ -29,9 +29,14 @@ export interface LegalFacts {
     google: boolean;
     microsoft: boolean;
   };
+  /** Content review (design plan §6.5): whose content waits for review, and a word list. */
+  moderation: {
+    review: 'untrusted' | 'all' | 'off';
+    blocklist: boolean;
+  };
 }
 
-const LAST_UPDATED = '20 October 2026';
+const LAST_UPDATED = '21 October 2026';
 
 const link = 'font-semibold text-signal-strong underline underline-offset-4 hover:text-ink';
 
@@ -303,6 +308,28 @@ export function PrivacyPage({
           Issuer profiles and achievements are public on purpose: they say who awards a badge and
           what it means. Contact addresses you put on an issuer profile are public too.
         </p>
+        <p>
+          {facts.moderation.review === 'all'
+            ? 'The people who run this site review the images and public text organizations upload before they are shown publicly. '
+            : facts.moderation.review === 'untrusted'
+              ? 'The people who run this site review the images and public text of organizations they haven’t marked as trusted before they are shown publicly. '
+              : ''}
+          {facts.moderation.blocklist
+            ? 'Text that matches a list of words the people who run this site keep is held for them to review. '
+            : ''}
+          They may hold or remove content that is reported or breaks the terms, and they see who
+          uploaded it.
+        </p>
+      </Section>
+
+      <Section title="If you report a problem">
+        <p>
+          The “Report a problem” form on badge, achievement and issuer pages keeps the page you
+          reported, what you chose and wrote, and your email address only if you give it (so the
+          people who run this site can answer you). Your IP address is used in memory only, to limit
+          how many reports one network can send, and isn’t stored with the report. Reports go to the
+          people who run this site, never to the organization you report.
+        </p>
       </Section>
 
       <Section title="If you check a badge">
@@ -523,6 +550,10 @@ export function TermsPage({
           <li>Pretending to be another organization or person.</li>
           <li>Phishing, spam, or emails people didn’t expect from you.</li>
           <li>Badges for things that didn’t happen, or content that is unlawful or abusive.</li>
+          <li>
+            Sexual or violent content, anything that sexualizes, exploits or endangers children, and
+            hate, harassment or threats.
+          </li>
           <li>Uploading malware or anything meant to harm the people who open it.</li>
           <li>
             Getting around rate limits, probing or attacking the service, or using it to attack
@@ -530,16 +561,19 @@ export function TermsPage({
           </li>
         </ul>
         <p>
-          Report misuse to <Mail address={facts.abuseEmail} fallback="abuse contact address" />, or
-          with “Report a problem” on any badge or issuer page.
+          Report misuse with “Report a problem” on any badge, achievement or issuer page, or to{' '}
+          <Mail address={facts.abuseEmail} fallback="abuse contact address" />.
         </p>
       </Section>
 
       <Section title="Suspension and leaving">
         <p>
-          We may suspend an organization that breaks these terms. A suspended organization can’t
-          award or email badges. Badges it awarded earlier stay checkable unless they are revoked,
-          which we may do for badges that are fraudulent or abusive.
+          We may hold an organization’s images and text for review before they are shown, remove
+          them, unpublish achievements, disable accounts, and suspend an organization that breaks
+          these terms. A suspended organization can’t award or email badges. Badges it awarded
+          earlier stay checkable unless they are revoked, which we may do for badges that are
+          fraudulent or abusive. We tell the organization’s owners what we did and why; to appeal,
+          reply to that email.
         </p>
         <p>
           You may stop using the service at any time.{' '}

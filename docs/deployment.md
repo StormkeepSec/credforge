@@ -415,11 +415,21 @@ sudo certbot certificates
   personal data (design plan §14).
 - The worker sends every email, issues CSV batches and re-signs status lists: if it's down,
   nothing is lost, and it catches up when it starts.
-- After an abuse report (phishing, impersonation), a platform admin suspends the organization in
-  **Platform** (its public pages then say so), and if its badges must stop verifying,
-  `docker compose exec app node dist/cli.js revoke-org-credentials --org <id> --reason "…"`
-  (without `--yes` it only counts them). Images stay cached in nginx; empty the cache with
-  `sudo rm -rf /var/cache/nginx/credforge-images/*` if one has to disappear.
+- **Moderation** ([abuse-handling.md](abuse-handling.md)): look at **Moderation** in the issuer
+  app at least daily. New orgs' content (and, with the default `MODERATION_REVIEW=untrusted`,
+  every org's you haven't marked trusted) waits there with the reports from public pages; approving
+  an org on the **Platform** screen publishes what it shows. Clear, remove, unpublish, suspend,
+  revoke every badge or disable an account from there; the owners are emailed the reason, and their
+  replies go to `ABUSE_EMAIL`. `docker compose exec app node dist/cli.js revoke-org-credentials
+  --org <id> --reason "…"` does the same revoking from the command line (without `--yes` it only
+  counts). Cleared images are cached for 10 minutes; to drop one from nginx at once, empty its
+  cache with `sudo rm -rf /var/cache/nginx/credforge-images/*`.
+- **A word list** for moderation, if you keep one, is a file of yours on the droplet, never in
+  the repository: for example `/opt/credforge/moderation-blocklist.txt` (next to `.env`, which
+  `ship.sh` doesn't touch either; the container's `node` user, uid 1000, must be able to read it:
+  `chown 1000 … && chmod 400 …`), mounted into `app` by a `docker-compose.override.yml` in
+  `/opt/credforge` and named with `MODERATION_TEXT_BLOCKLIST_FILE` in `.env` (the override is in
+  [abuse-handling.md](abuse-handling.md), §2). Restart `app` after changing it.
 - A request to delete a recipient's data (to the privacy address) goes to the organization that
   awarded the badge: its owners and admins use **Erase this person's data** on one of the badges.
   If the organization doesn't answer, or is suspended,
@@ -443,6 +453,8 @@ sudo certbot certificates
 | Sign-in with Google or Microsoft fails | The redirect URI must match exactly (`https`, no trailing slash); `docker compose logs app` |
 | Certificate renewal fails | `sudo certbot renew --dry-run`; the port 80 server must still serve `/.well-known/acme-challenge/` from `/var/www/html` |
 | Two-step codes refused, or "too many failed verification attempts" | [Lost access to two-step verification](#lost-access-to-two-step-verification), next |
+| A new org's achievement page says "Waiting for review" and its badges' pages are 404 to others | Content waits for review (`MODERATION_REVIEW`): approve the org or clear its content in **Moderation**, or mark it trusted |
+| A removed image still shows somewhere | Caches: up to 10 minutes in browsers and nginx (`sudo rm -rf /var/cache/nginx/credforge-images/*`); link previews and email clients keep their own copies |
 
 ### Lost access to two-step verification
 

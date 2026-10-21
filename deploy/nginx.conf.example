@@ -22,8 +22,10 @@ upstream credforge {
 }
 
 # Badge images and issuer logos (/achievements/{id}/images/…, /issuers/{id}/images/…). Their URLs
-# contain the image's SHA-256 and the app answers "Cache-Control: public, max-age=31536000,
-# immutable", so a cached copy never goes stale and repeat requests reach neither Node nor Spaces.
+# contain the image's SHA-256, so the bytes never change, but a platform admin can remove an image
+# (design plan §6.5): the app answers "Cache-Control: public, max-age=600" for cleared images (and
+# no-store for ones waiting for review), and nginx follows it, so a removed image leaves this
+# cache within 10 minutes. To drop everything at once: sudo rm -rf /var/cache/nginx/credforge-images/*
 proxy_cache_path /var/cache/nginx/credforge-images levels=1:2 keys_zone=credforge_images:10m
                  max_size=1g inactive=30d use_temp_path=off;
 
@@ -132,7 +134,8 @@ server {
         proxy_pass http://credforge;
         proxy_cache credforge_images;
         proxy_cache_key $uri;
-        proxy_cache_valid 200 30d;
+        # Only for responses without their own Cache-Control (the app always sends one).
+        proxy_cache_valid 200 10m;
         proxy_cache_lock on;
         proxy_cache_use_stale error timeout updating;
         add_header X-Cache-Status $upstream_cache_status always;

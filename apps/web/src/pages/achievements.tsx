@@ -5,6 +5,7 @@ import { Award, Plus } from 'lucide-react';
 import { PageHeader } from '../components/app-shell';
 import { AchievementStatusBadge } from '../components/delivery';
 import { isWritable, OrgStatusBanner } from '../components/org-status';
+import { ReviewBadge } from '../components/review';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Alert, Spinner } from '../components/ui/feedback';
@@ -86,8 +87,9 @@ export function AchievementsPage({ orgId }: { orgId: string }) {
                     {achievementTypeLabel(achievement.achievementType)} · awarded{' '}
                     {achievement.awardedCount} {achievement.awardedCount === 1 ? 'time' : 'times'}
                   </p>
-                  <span>
+                  <span className="flex flex-wrap gap-1.5">
                     <AchievementStatusBadge status={achievement.status} />
+                    <ReviewBadge achievement={achievement} />
                   </span>
                 </div>
               </Link>

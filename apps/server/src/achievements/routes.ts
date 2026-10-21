@@ -15,15 +15,20 @@ import {
   eq,
   file,
   issuer,
+  moderationItem,
+  ne,
   type Queryable,
   signingKey,
   user,
 } from '@credforge/db';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { ApiError, conflict, notFound, parse, uuidParam } from '../api/errors';
+import type { RateLimiter } from '../api/rate-limit';
 import { acceptImageUploads, storeUploadedImage, UPLOAD_ROUTE_OPTIONS } from '../api/uploads';
 import { recordAudit } from '../audit/audit';
 import { deleteFiles, loadFiles } from '../files/service';
+import { loadReviews } from '../moderation/service';
+import { reviewAchievementText, reviewImage } from '../moderation/subjects';
 import { type OrgAccess, requestInfo, requirePermission, requireWritable } from '../orgs/access';
 import type { Services } from '../services';
 import {
@@ -43,10 +48,11 @@ const idOf = (request: FastifyRequest) =>
  * plan §5.2). Drafts can't be awarded and aren't public; archived achievements can't be awarded
  * but their pages stay up, since issued credentials link to them.
  */
-export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = async (
-  app,
-  { services },
-) => {
+export const achievementRoutes: FastifyPluginAsync<{
+  services: Services;
+  /** Uploads per org (shared by every upload route). */
+  uploadLimiter: RateLimiter;
+}> = async (app, { services, uploadLimiter }) => {
   const { db, config, storage } = services;
   acceptImageUploads(app);
 
@@ -60,8 +66,9 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
       orgId,
       rows.map((row) => row.id),
     );
+    const reviews = await loadReviews(db, rows);
     return rows.map((row) =>
-      serializeAchievement(config.publicBaseUrl, row, files, counts.get(row.id) ?? 0),
+      serializeAchievement(config.publicBaseUrl, row, files, counts.get(row.id) ?? 0, reviews),
     );
   }
 
@@ -94,6 +101,7 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
   ) {
     return db.transaction(async (tx) => {
       const before = await load(access.org.id, achievementId, tx, true);
+      refuseIfRemoved(before);
       const next: AchievementSnapshot = { ...snapshotOf(before), ...change(before) };
       if (!next.criteriaNarrative && !next.criteriaUrl) {
         throw new ApiError(400, 'validation_failed', 'Check the highlighted fields', undefined, {
@@ -109,6 +117,7 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
         .where(eq(achievement.id, achievementId))
         .returning();
       if (!after) throw notFound('Achievement');
+      await reviewAchievementText(tx, config.moderation, access.org, after, access.userId);
       await tx.insert(achievementRevision).values({
         achievementId,
         revision,
@@ -189,6 +198,7 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
         })
         .returning();
       if (!row) throw new Error('Insert returned no row.');
+      await reviewAchievementText(tx, config.moderation, access.org, row, access.userId);
       await tx.insert(achievementRevision).values({
         achievementId: row.id,
         revision: 1,
@@ -233,17 +243,24 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
   });
 
   /** Sets the badge image: the file itself as the body (PNG, SVG, JPEG or WebP, up to 2 MB). */
-  app.put('/achievements/:achievementId/image', UPLOAD_ROUTE_OPTIONS, async (request) => {
+  app.put('/achievements/:achievementId/image', UPLOAD_ROUTE_OPTIONS, async (request, reply) => {
     const access = requirePermission(request, 'achievement:write');
     requireWritable(access);
     const achievementId = idOf(request);
-    await load(access.org.id, achievementId);
-    const image = await storeUploadedImage(db, storage, request, {
-      orgId: access.org.id,
-      kind: 'badge_image',
-      subjectId: achievementId,
-      createdBy: access.userId,
-    });
+    refuseIfRemoved(await load(access.org.id, achievementId));
+    const image = await storeUploadedImage(
+      db,
+      storage,
+      request,
+      {
+        orgId: access.org.id,
+        kind: 'badge_image',
+        subjectId: achievementId,
+        createdBy: access.userId,
+      },
+      { config, limiter: uploadLimiter, org: access.org, reply },
+    );
+    await reviewImage(db, config.moderation, access.org, image, access.userId);
     await saveChange(
       request,
       access,
@@ -331,6 +348,7 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
       const row = await load(access.org.id, achievementId, tx, true);
       if (row.status === 'active') return;
       if (row.status !== 'archived') throw conflict('Only archived achievements can be restored.');
+      refuseIfRemoved(row);
       await tx
         .update(achievement)
         .set({ status: 'active', archivedAt: null, updatedAt: new Date() })
@@ -357,6 +375,17 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
         throw conflict('Only drafts can be deleted. Archive a published achievement instead.');
       }
       await tx.delete(achievement).where(eq(achievement.id, achievementId));
+      // Its text versions leave the moderation queue with it (a removed one is kept, §6.5).
+      await tx
+        .delete(moderationItem)
+        .where(
+          and(
+            eq(moderationItem.kind, 'text'),
+            eq(moderationItem.subjectType, 'achievement'),
+            eq(moderationItem.subjectId, achievementId),
+            ne(moderationItem.status, 'removed'),
+          ),
+        );
       await recordAudit(tx, {
         orgId: access.org.id,
         actor: access.actor,
@@ -413,6 +442,19 @@ export const achievementRoutes: FastifyPluginAsync<{ services: Services }> = asy
     },
   );
 };
+
+/** An achievement a platform admin unpublished stays as it is until one puts it back (§6.5). */
+function refuseIfRemoved(row: AchievementRow) {
+  if (!row.removedAt) return;
+  throw new ApiError(
+    409,
+    'removed_by_platform',
+    'Removed by the people who run this site',
+    row.removedReason
+      ? `It was unpublished: ${row.removedReason} Reply to the email about it to ask for it back.`
+      : 'It was unpublished. Reply to the email about it to ask for it back.',
+  );
+}
 
 function cleanAlignment(input: {
   targetName: string;

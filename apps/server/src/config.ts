@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { SIGNUP_MODES, type SignupMode } from '@credforge/contracts';
 import { z } from 'zod';
+import { type Blocklist, parseBlocklist } from './moderation/blocklist';
 
 /**
  * Defaults applied only when NODE_ENV=development, so `pnpm dev` works with no setup.
@@ -18,6 +19,8 @@ const DEVELOPMENT_DEFAULTS: Record<string, string> = {
   // So the report link, security.txt and the legal pages' contacts show in development.
   ABUSE_EMAIL: 'abuse@credforge.test',
   SECURITY_EMAIL: 'security@credforge.test',
+  // The e2e tests send reports from one address, run after run (the limit is tested in moderation.test.ts).
+  REPORT_RATE_LIMIT: '200',
 };
 
 /** Used outside production when the variable isn't set. Never valid in production. */
@@ -26,6 +29,14 @@ const NON_PRODUCTION_SECRETS = {
   // base64 of the 32 ASCII bytes "credforge-dev-master-key-32bytes"
   CREDFORGE_MASTER_KEY: 'Y3JlZGZvcmdlLWRldi1tYXN0ZXIta2V5LTMyYnl0ZXM=',
 };
+
+/**
+ * Which orgs' images and public text wait for a platform admin before they are served (design plan
+ * §6.5, decision 56): `untrusted` (the default) every org a platform admin hasn't marked trusted,
+ * `all` every org, `off` none (the word list and reports still hold content).
+ */
+export const MODERATION_REVIEW_MODES = ['untrusted', 'all', 'off'] as const;
+export type ModerationReviewMode = (typeof MODERATION_REVIEW_MODES)[number];
 
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -163,6 +174,23 @@ const envSchema = z
       .min(0, 'must be 0 (no limit) or more')
       .default(30),
     AUTH_RATE_LIMIT: z.stringbool().optional(),
+    MODERATION_REVIEW: z.enum(MODERATION_REVIEW_MODES).default('untrusted'),
+    MODERATION_TEXT_BLOCKLIST: z.string().optional(),
+    ORG_UPLOAD_RATE_LIMIT: z.coerce
+      .number({ error: 'must be a whole number' })
+      .int('must be a whole number')
+      .min(0, 'must be 0 (no limit) or more')
+      .default(60),
+    ORG_STORAGE_QUOTA_MB: z.coerce
+      .number({ error: 'must be a whole number' })
+      .int('must be a whole number')
+      .min(0, 'must be 0 (no limit) or more')
+      .default(500),
+    REPORT_RATE_LIMIT: z.coerce
+      .number({ error: 'must be a whole number' })
+      .int('must be a whole number')
+      .min(0, 'must be 0 (no limit) or more')
+      .default(10),
     ABUSE_EMAIL: z.email('must be an email address').optional(),
     PRIVACY_EMAIL: z.email('must be an email address').optional(),
     SECURITY_EMAIL: z.email('must be an email address').optional(),
@@ -343,6 +371,18 @@ export interface Config {
   claimRateLimit: number;
   /** Better Auth's sign-in, sign-up, reset and second-factor limits (on in production). */
   authRateLimit: boolean;
+  moderation: {
+    /** Whose new content is held for review (MODERATION_REVIEW). */
+    review: ModerationReviewMode;
+    /** The operator's word list (MODERATION_TEXT_BLOCKLIST or its _FILE); empty when unset. */
+    blocklist: Blocklist;
+  };
+  /** Image and CSV uploads per org per hour, unless a platform admin set the org's own; 0 = no limit. */
+  orgUploadRateLimit: number;
+  /** Stored files per org in MB, unless a platform admin set the org's own; 0 = no limit. */
+  orgStorageQuotaMb: number;
+  /** Reports from public pages per client IP per hour; 0 = no limit. */
+  reportRateLimit: number;
   /** Where "Report a problem" on public pages goes; unset hides the link. */
   abuseEmail?: string;
   /** For privacy requests on /privacy; defaults to the abuse address. */
@@ -446,6 +486,13 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     apiRateLimit: env.API_RATE_LIMIT,
     claimRateLimit: env.CLAIM_RATE_LIMIT,
     authRateLimit: env.AUTH_RATE_LIMIT ?? env.NODE_ENV === 'production',
+    moderation: {
+      review: env.MODERATION_REVIEW,
+      blocklist: parseBlocklist(env.MODERATION_TEXT_BLOCKLIST),
+    },
+    orgUploadRateLimit: env.ORG_UPLOAD_RATE_LIMIT,
+    orgStorageQuotaMb: env.ORG_STORAGE_QUOTA_MB,
+    reportRateLimit: env.REPORT_RATE_LIMIT,
     abuseEmail: env.ABUSE_EMAIL,
     privacyEmail: env.PRIVACY_EMAIL ?? env.ABUSE_EMAIL,
     securityEmail: env.SECURITY_EMAIL,

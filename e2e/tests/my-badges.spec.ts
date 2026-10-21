@@ -4,6 +4,7 @@ import { expectScreen, openScreen } from '../support/app';
 import { expectAccessible } from '../support/axe';
 import { fixtures, SIGNED_IN, SIGNED_OUT, testEmail } from '../support/fixtures';
 import { LINKS, mailLink } from '../support/mailpit';
+import { trustOrg } from '../support/moderation';
 
 // My badges (design plan §8.8): a person who only receives badges signs up with the address they
 // were sent to and lands on their own list; hiding a page, an extra address confirmed from its
@@ -24,6 +25,8 @@ async function awardingOrg(browser: Browser, runId: string) {
     const name = `E2E Recipients ${runId}`;
     const org = await post<{ id: string }>(owner.request, '/api/v1/orgs', { name });
     await post(admin.request, `/api/v1/platform/orgs/${org.id}/approve`);
+    // Trusted, so its badges reach people outside it without waiting for review (§6.5).
+    await trustOrg(admin.request, org.id);
     const api = `/api/v1/orgs/${org.id}`;
     await post(owner.request, `${api}/issuers`, { name, url: 'https://example.org' });
     const achievement = async (title: string) => {

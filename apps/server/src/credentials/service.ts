@@ -43,6 +43,7 @@ import {
   keysForIssuers,
   loadSigner,
 } from '../issuers/service';
+import { awardContent, CONTENT_IN_REVIEW_RULE } from '../moderation/awards';
 import { effectiveDailySendLimit } from '../orgs/service';
 import { allocateStatusEntry } from '../status-lists/service';
 
@@ -188,6 +189,21 @@ export function assertOrgCanIssue(org: { status: string }): void {
   }
 }
 
+/** Whether the address is a member's confirmed address (all a pending org may award to, §6.3). */
+export async function isMemberAddress(
+  db: Queryable,
+  orgId: string,
+  email: string,
+): Promise<boolean> {
+  const [own] = await db
+    .select({ id: member.id })
+    .from(member)
+    .innerJoin(user, eq(member.userId, user.id))
+    .where(and(eq(member.orgId, orgId), eq(user.email, email), eq(user.emailVerified, true)))
+    .limit(1);
+  return own !== undefined;
+}
+
 /** Members' confirmed addresses: all a pending org may award to (§6.3). */
 export async function memberAddresses(db: Queryable, orgId: string): Promise<Set<string>> {
   const rows = await db
@@ -263,13 +279,7 @@ export async function awardInTransaction(
   // Approval gate (§6.3): a pending org may award only to its own members' verified addresses.
   const email = input.recipient.email;
   if (org.status === 'pending') {
-    const [own] = await tx
-      .select({ id: member.id })
-      .from(member)
-      .innerJoin(user, eq(member.userId, user.id))
-      .where(and(eq(member.orgId, org.id), eq(user.email, email), eq(user.emailVerified, true)))
-      .limit(1);
-    if (!own) {
+    if (!(await isMemberAddress(tx, org.id, email))) {
       throw new ApiError(
         403,
         'recipient_not_allowed',
@@ -301,6 +311,32 @@ export async function awardInTransaction(
   const files = await loadFiles(tx, [row.imageFileId, issuerRow.imageFileId]);
   const image = row.imageFileId ? files.get(row.imageFileId) : undefined;
   const logo = issuerRow.imageFileId ? files.get(issuerRow.imageFileId) : undefined;
+
+  // Held content never leaves the org (§6.5): only members until it is cleared, nobody once removed.
+  const content = await awardContent(tx, config.moderation, {
+    org,
+    achievement: row,
+    issuer: issuerRow,
+    image,
+    logo,
+  });
+  if (content.removed.length > 0 || row.removedAt) {
+    throw new ApiError(
+      409,
+      'content_removed',
+      'Removed by the people who run this site',
+      row.removedAt
+        ? 'This achievement was unpublished by the people who run this site, so it can’t be awarded.'
+        : `The ${content.removed.join(' and ')} was removed by the people who run this site. Change it before awarding this badge.`,
+    );
+  }
+  if (
+    content.held.length > 0 &&
+    org.status !== 'pending' &&
+    !(await isMemberAddress(tx, org.id, email))
+  ) {
+    throw new ApiError(409, 'content_in_review', 'Waiting for review', CONTENT_IN_REVIEW_RULE);
+  }
 
   const validFrom = resolveValidFrom(input.issuedOn, now);
   const validUntil = resolveValidUntil(input.expiresOn, validFrom, row.validForDays);
@@ -380,6 +416,7 @@ export async function awardInTransaction(
     issuedByType: actor.type,
     issuedById: actor.id,
     auditKey,
+    heldItemIds: content.held,
     createdAt: now,
     updatedAt: now,
   });

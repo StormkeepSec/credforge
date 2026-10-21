@@ -7,6 +7,7 @@ import type {
   BatchDetails,
   BatchPage,
   BatchRowPage,
+  ContentReportPage,
   CredentialDetails,
   CredentialFilters,
   CredentialPage,
@@ -16,12 +17,16 @@ import type {
   Issuer,
   Member,
   MeResponse,
+  ModerationItemPage,
+  ModerationStatus,
+  ModerationSummary,
   OrgDetails,
   OrgStatus,
   PlatformOrg,
   Problem,
   ProblemCode,
   RecipientCredentialPage,
+  ReportStatus,
 } from '@credforge/contracts';
 import { queryOptions } from '@tanstack/react-query';
 
@@ -182,6 +187,25 @@ export const queries = {
         api<{ orgs: PlatformOrg[] }>(
           `/platform/orgs${status === 'all' ? '' : `?status=${status}`}`,
         ),
+    }),
+  moderationSummary: () =>
+    queryOptions({
+      queryKey: ['platform', 'moderation', 'summary'],
+      queryFn: () => api<ModerationSummary>('/platform/moderation/summary'),
+    }),
+  /** The moderation queue (design plan §6.5); `orgId` narrows it to one organization. */
+  moderationItems: (status: ModerationStatus, orgId?: string) =>
+    queryOptions({
+      queryKey: ['platform', 'moderation', 'items', status, orgId ?? null],
+      queryFn: () =>
+        api<ModerationItemPage>(
+          `/platform/moderation/items?status=${status}&limit=100${orgId ? `&orgId=${orgId}` : ''}`,
+        ),
+    }),
+  reports: (status: ReportStatus) =>
+    queryOptions({
+      queryKey: ['platform', 'moderation', 'reports', status],
+      queryFn: () => api<ContentReportPage>(`/platform/reports?status=${status}&limit=100`),
     }),
 };
 

@@ -1,6 +1,8 @@
 import type { OrgStatus } from '@credforge/contracts';
 import { OrgStatusNotice } from '../components/org-notice';
-import { ReportProblem, SitePage, websiteLabel } from '../components/site-chrome';
+import { type ReportFormProps, ReportProblem } from '../components/report-form';
+import { ReviewNotice } from '../components/review-notice';
+import { SitePage, websiteLabel } from '../components/site-chrome';
 import { Document } from '../document';
 
 export interface IssuerPageProps {
@@ -16,8 +18,10 @@ export interface IssuerPageProps {
     /** The website's host when the issuer proved it controls it (§6.3). */
     verifiedHost: string | null;
   };
-  /** Where "Report a problem" goes; unset hides it. */
-  reportEmail?: string;
+  /** The "Report a problem" form at the foot of the page. */
+  report: ReportFormProps;
+  /** Waiting for review (§6.5): `new` shows no details yet, `update` the version cleared last. */
+  review: 'new' | 'update' | null;
   orgStatus: OrgStatus;
   keyCount: number;
 }
@@ -42,7 +46,8 @@ export function IssuerPage({
   issuer,
   orgStatus,
   keyCount,
-  reportEmail,
+  report,
+  review,
 }: IssuerPageProps) {
   const website = issuer.website ? websiteLabel(issuer.website, issuer.verifiedHost) : null;
   return (
@@ -79,6 +84,7 @@ export function IssuerPage({
           </div>
 
           <OrgStatusNotice status={orgStatus} subject="issuer" />
+          {review && <ReviewNotice subject="issuer" state={review} />}
 
           {issuer.description && (
             <p className="mt-8 text-lg leading-relaxed whitespace-pre-line text-ink-muted">
@@ -133,7 +139,7 @@ export function IssuerPage({
           </dl>
           <div className="mt-12 grid gap-2">
             <p className="text-sm text-ink-muted">Hosted on credforge.</p>
-            <ReportProblem email={reportEmail} pageUrl={url} />
+            <ReportProblem {...report} />
           </div>
         </section>
       </SitePage>

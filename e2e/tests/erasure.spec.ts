@@ -3,6 +3,8 @@ import { BADGE_SVG, post, put } from '../support/accounts';
 import { expectScreen, openScreen } from '../support/app';
 import { expectAccessible } from '../support/axe';
 import { fixtures, SIGNED_IN } from '../support/fixtures';
+import { trustOrg } from '../support/moderation';
+import { BASE_URL } from '../support/stack';
 
 // Erasing a recipient's data (design plan §12.1): what it covers, confirming in place, the
 // erased badge in the issuer app, and its public page (410 Gone).
@@ -12,6 +14,7 @@ test.describe('as an organization owner', () => {
 
   test('erase a recipient’s data: review, confirm, the erased badge and its public page', async ({
     page,
+    playwright,
   }) => {
     test.setTimeout(120_000);
     const { owner, runId } = fixtures();
@@ -20,6 +23,13 @@ test.describe('as an organization owner', () => {
     const request = page.request;
     const name = `E2E Erasure ${runId}`;
     const org = await post<{ id: string }>(request, '/api/v1/orgs', { name });
+    // Its content is public at once, so the 410 page below can name the issuer (§6.5).
+    const admin = await playwright.request.newContext({
+      baseURL: BASE_URL,
+      storageState: SIGNED_IN.admin,
+    });
+    await trustOrg(admin, org.id);
+    await admin.dispose();
     const api = `/api/v1/orgs/${org.id}`;
     await post(request, `${api}/issuers`, { name, url: 'https://example.org' });
     const achievement = await post<{ id: string }>(request, `${api}/achievements`, {

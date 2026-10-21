@@ -58,6 +58,13 @@ export const user = pgTable('user', {
   twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
   /** Instance operator: approves and suspends orgs. Set with `cli.js create-platform-admin`. */
   isPlatformAdmin: boolean('is_platform_admin').notNull().default(false),
+  /**
+   * Set when a platform admin disabled the account (design plan §6.5): its sessions were ended
+   * and it can't sign in until it is enabled again.
+   */
+  disabledAt: timestamptz('disabled_at'),
+  disabledReason: text('disabled_reason'),
+  disabledBy: uuid('disabled_by').references((): AnyPgColumn => user.id, { onDelete: 'set null' }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -195,6 +202,20 @@ export const organization = pgTable(
      * (DEFAULT_ORG_DAILY_SEND_LIMIT); 0 means no limit. Set by platform admins.
      */
     dailySendLimit: integer('daily_send_limit'),
+    /**
+     * Set when a platform admin vouched for the org: with MODERATION_REVIEW=untrusted (the
+     * default) its images and public text are published without waiting for review (§6.5).
+     */
+    trustedAt: timestamptz('trusted_at'),
+    trustedBy: uuid('trusted_by').references(() => user.id, { onDelete: 'set null' }),
+    /** The org's name as last submitted for review (a `moderation_item`). */
+    nameItemId: uuid('name_item_id').references((): AnyPgColumn => moderationItem.id),
+    /**
+     * Image and CSV uploads per hour, and stored files in MB. Null uses the instance default
+     * (ORG_UPLOAD_RATE_LIMIT, ORG_STORAGE_QUOTA_MB); 0 means no limit. Set by platform admins.
+     */
+    uploadRateLimit: integer('upload_rate_limit'),
+    storageQuotaMb: integer('storage_quota_mb'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -327,6 +348,8 @@ export const issuer = pgTable(
     /** The last re-check, and how many in a row failed (verification lapses after a few). */
     domainCheckedAt: timestamptz('domain_checked_at'),
     domainCheckFailures: integer('domain_check_failures').notNull().default(0),
+    /** The public text (name, description, website, contact) as last submitted for review. */
+    textItemId: uuid('text_item_id').references((): AnyPgColumn => moderationItem.id),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -498,6 +521,15 @@ export const achievement = pgTable(
     createdBy: uuid('created_by').references(() => user.id, { onDelete: 'set null' }),
     publishedAt: timestamptz('published_at'),
     archivedAt: timestamptz('archived_at'),
+    /** The public text (name, description, criteria, tags, alignments) as last submitted for review. */
+    textItemId: uuid('text_item_id').references((): AnyPgColumn => moderationItem.id),
+    /**
+     * Set when a platform admin unpublished it (design plan §6.5): it is archived, its page answers
+     * 410, and only a platform admin can put it back.
+     */
+    removedAt: timestamptz('removed_at'),
+    removedBy: uuid('removed_by').references(() => user.id, { onDelete: 'set null' }),
+    removedReason: text('removed_reason'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -816,6 +848,12 @@ export const credential = pgTable(
     auditKey: bytea('audit_key'),
     /** When the recipient's data was erased; the row is then a tombstone. */
     erasedAt: timestamptz('erased_at'),
+    /**
+     * Content the badge carries that wasn't cleared when it was awarded (`moderation_item` ids; only
+     * awards to the org's own members can carry it, §6.5). While any is left the page, its JSON and
+     * downloads answer 404 to everyone but the recipient; clearing an item removes it from here.
+     */
+    heldItemIds: uuid('held_item_ids').array().notNull().default(sql`'{}'::uuid[]`),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -828,6 +866,7 @@ export const credential = pgTable(
       .on(table.recipientEmail)
       .where(sql`${table.recipientEmail} is not null`),
     index('credential_org_batch_idx').on(table.orgId, table.batchId),
+    index('credential_held_idx').on(table.orgId).where(sql`${table.heldItemIds} <> '{}'::uuid[]`),
     uniqueIndex('credential_status_entry_idx').on(table.statusListId, table.statusListIndex),
     uniqueIndex('credential_batch_row_idx')
       .on(table.batchId, table.batchRowNumber)
@@ -900,6 +939,124 @@ export const emailMessage = pgTable(
     index('email_message_org_created_idx').on(table.orgId, table.createdAt),
     index('email_message_provider_id_idx').on(table.providerMessageId),
     check('email_message_status_check', oneOf(table.status, EMAIL_STATUS_VALUES)),
+  ],
+);
+
+// ---- Moderation (design plan §6.5) ----
+
+export const MODERATION_KIND_VALUES = ['image', 'text'] as const;
+export const MODERATION_SUBJECT_VALUES = ['organization', 'issuer', 'achievement'] as const;
+/**
+ * `pending`: held for review, so not served publicly. `cleared`: published. `removed`: taken
+ * down by a platform admin; an image's permanent URL answers with an "Image removed" placeholder.
+ */
+export const MODERATION_STATUS_VALUES = ['pending', 'cleared', 'removed'] as const;
+
+/** Why an item is (or was) held: the review policy, the operator's word list, or a report. */
+export type ModerationFlag =
+  | { source: 'review'; at: string }
+  | { source: 'blocklist'; at: string; terms: string[] }
+  | { source: 'report'; at: string; reportId: string; category: string };
+
+/**
+ * One version of an org's public content, as it was submitted for review: an uploaded image (a
+ * badge image or issuer logo; one item per `file`), or the public text of an org, issuer or
+ * achievement (one item per distinct text, found again by `content_hash`, so going back to text
+ * that was already reviewed doesn't need a new review). `content` keeps the text as submitted, so
+ * public pages can show the last cleared version while an edit waits.
+ */
+export const moderationItem = pgTable(
+  'moderation_item',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organization.id),
+    kind: text('kind', { enum: MODERATION_KIND_VALUES }).notNull(),
+    subjectType: text('subject_type', { enum: MODERATION_SUBJECT_VALUES }).notNull(),
+    subjectId: uuid('subject_id').notNull(),
+    fileId: uuid('file_id').references(() => file.id, { onDelete: 'cascade' }),
+    /** The text fields reviewed (text items). */
+    content: jsonb('content').$type<Record<string, unknown>>(),
+    /** Hex SHA-256 of the text as `content` holds it, or of the image file. */
+    contentHash: text('content_hash').notNull(),
+    status: text('status', { enum: MODERATION_STATUS_VALUES }).notNull().default('pending'),
+    flags: jsonb('flags').$type<ModerationFlag[]>().notNull().default([]),
+    /** Who uploaded or saved this version, and when it was last saved (again). */
+    submittedBy: uuid('submitted_by').references(() => user.id, { onDelete: 'set null' }),
+    submittedAt: timestamptz('submitted_at').notNull().defaultNow(),
+    /** The latest decision: null `decided_by` means it was cleared without review (§6.5). */
+    decidedAt: timestamptz('decided_at'),
+    decidedBy: uuid('decided_by').references(() => user.id, { onDelete: 'set null' }),
+    decisionNote: text('decision_note'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    index('moderation_item_org_idx').on(table.orgId, table.createdAt),
+    index('moderation_item_subject_idx').on(table.subjectType, table.subjectId),
+    index('moderation_item_pending_idx')
+      .on(table.createdAt)
+      .where(sql`${table.status} = 'pending'`),
+    uniqueIndex('moderation_item_file_idx')
+      .on(table.fileId)
+      .where(sql`${table.fileId} is not null`),
+    uniqueIndex('moderation_item_text_idx')
+      .on(table.subjectType, table.subjectId, table.contentHash)
+      .where(sql`${table.kind} = 'text'`),
+    check('moderation_item_kind_check', oneOf(table.kind, MODERATION_KIND_VALUES)),
+    check('moderation_item_subject_check', oneOf(table.subjectType, MODERATION_SUBJECT_VALUES)),
+    check('moderation_item_status_check', oneOf(table.status, MODERATION_STATUS_VALUES)),
+    check(
+      'moderation_item_shape_check',
+      sql`("kind" = 'image' and "file_id" is not null) or ("kind" = 'text' and "content" is not null)`,
+    ),
+  ],
+);
+
+export const REPORT_TARGET_VALUES = ['credential', 'achievement', 'issuer'] as const;
+export const REPORT_CATEGORY_VALUES = [
+  'child_safety',
+  'sexual_content',
+  'hate_harassment',
+  'violence',
+  'impersonation',
+  'scam_phishing',
+  'personal_data',
+  'other',
+] as const;
+export const REPORT_STATUS_VALUES = ['open', 'resolved', 'dismissed'] as const;
+
+/**
+ * A report from the "Report a problem" form on a public page (design plan §6.5). Nothing about
+ * the reporter is kept but what they chose to give (an email address for a reply). A child-safety
+ * report holds the page's images for review at once (`held_item_ids`).
+ */
+export const contentReport = pgTable(
+  'content_report',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organization.id),
+    targetType: text('target_type', { enum: REPORT_TARGET_VALUES }).notNull(),
+    targetId: uuid('target_id').notNull(),
+    category: text('category', { enum: REPORT_CATEGORY_VALUES }).notNull(),
+    details: text('details'),
+    reporterEmail: text('reporter_email'),
+    status: text('status', { enum: REPORT_STATUS_VALUES }).notNull().default('open'),
+    heldItemIds: uuid('held_item_ids').array().notNull().default(sql`'{}'::uuid[]`),
+    resolvedAt: timestamptz('resolved_at'),
+    resolvedBy: uuid('resolved_by').references(() => user.id, { onDelete: 'set null' }),
+    resolutionNote: text('resolution_note'),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index('content_report_open_idx').on(table.createdAt).where(sql`${table.status} = 'open'`),
+    index('content_report_org_idx').on(table.orgId, table.createdAt),
+    check('content_report_target_check', oneOf(table.targetType, REPORT_TARGET_VALUES)),
+    check('content_report_category_check', oneOf(table.category, REPORT_CATEGORY_VALUES)),
+    check('content_report_status_check', oneOf(table.status, REPORT_STATUS_VALUES)),
   ],
 );
 

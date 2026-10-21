@@ -5,6 +5,7 @@ import { requireReadySession } from '../api/auth-context';
 import { ApiError, parse } from '../api/errors';
 import { recordAudit } from '../audit/audit';
 import { orgSubmittedMessage } from '../email/messages';
+import { reviewOrgName } from '../moderation/subjects';
 import type { Services } from '../services';
 import {
   orgAccessOf,
@@ -71,6 +72,7 @@ export const userOrgRoutes: FastifyPluginAsync<{ services: Services }> = async (
         })
         .returning();
       if (!org) throw new Error('Insert returned no row.');
+      await reviewOrgName(tx, config.moderation, org, actor.user.id);
       const [owner] = await tx
         .insert(member)
         .values({ orgId: org.id, userId: actor.user.id, role: 'owner' })
@@ -131,6 +133,12 @@ export const orgRoutes: FastifyPluginAsync<{ services: Services }> = async (app,
           .update(organization)
           .set({ name: input.name, updatedAt: new Date() })
           .where(eq(organization.id, access.org.id));
+        await reviewOrgName(
+          tx,
+          config.moderation,
+          { ...access.org, name: input.name },
+          access.userId,
+        );
         await recordAudit(tx, {
           orgId: access.org.id,
           actor: access.actor,

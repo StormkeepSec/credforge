@@ -21,6 +21,8 @@ import {
   bulkRevokeInput,
   bulkRevokeResultSchema,
   confirmEmailInput,
+  contentReportPageSchema,
+  contentReportSchema,
   createApiKeyInput,
   createBatchFromRowsInput,
   createdApiKeySchema,
@@ -29,6 +31,7 @@ import {
   credentialFilters,
   credentialPageSchema,
   credentialsQuery,
+  disableUserInput,
   domainCheckResultSchema,
   domainVerificationSchema,
   instanceInfoSchema,
@@ -39,6 +42,12 @@ import {
   issuerSchema,
   memberSchema,
   meResponseSchema,
+  moderationClearInput,
+  moderationItemPageSchema,
+  moderationItemSchema,
+  moderationItemsQuery,
+  moderationReasonInput,
+  moderationSummarySchema,
   orgDetailsSchema,
   type Permission,
   platformDecisionInput,
@@ -52,7 +61,11 @@ import {
   recipientErasurePreviewSchema,
   recipientErasureResultSchema,
   reissueInput,
+  reportsQuery,
+  resolveReportInput,
   revokeInput,
+  revokeOrgCredentialsInput,
+  trustOrgInput,
   updateAchievementInput,
   updateBatchInput,
   updateIssuerInput,
@@ -157,6 +170,7 @@ const AUDIT = 'Audit log';
 const ACCOUNT = 'Account';
 const MY_BADGES = 'My badges';
 const PLATFORM_TAG = 'Platform';
+const MODERATION_TAG = 'Moderation';
 
 export const OPERATIONS: readonly Operation[] = [
   // ---- account and instance ----
@@ -824,7 +838,9 @@ export const OPERATIONS: readonly Operation[] = [
     method: 'PATCH',
     path: '/platform/orgs/{orgId}/limits',
     tag: PLATFORM_TAG,
-    summary: 'Set an organization’s daily email cap',
+    summary: 'Set an organization’s limits',
+    description:
+      'Its daily award-email cap, uploads per hour and storage quota (MB). `null` uses the instance default, 0 means no limit, a limit left out stays as it is.',
     auth: PLATFORM,
     body: platformOrgLimitsInput,
     responses: [
@@ -833,9 +849,146 @@ export const OPERATIONS: readonly Operation[] = [
           id: z.uuid(),
           dailySendLimit: z.number().int().nullable(),
           defaultDailySendLimit: z.number().int(),
+          uploadRateLimit: z.number().int().nullable(),
+          defaultUploadRateLimit: z.number().int(),
+          storageQuotaMb: z.number().int().nullable(),
+          defaultStorageQuotaMb: z.number().int(),
         }),
       ),
     ],
+  },
+  {
+    method: 'POST',
+    path: '/platform/orgs/{orgId}/trust',
+    tag: PLATFORM_TAG,
+    summary: 'Mark an organization trusted, or not',
+    description:
+      'With `MODERATION_REVIEW=untrusted` (the default), a trusted organization’s new images and public text are published without waiting for review. Its word-list matches and reports are still held.',
+    auth: PLATFORM,
+    body: trustOrgInput,
+    responses: [ok(z.object({ id: z.uuid(), trustedAt: z.string().nullable() }))],
+  },
+  {
+    method: 'POST',
+    path: '/platform/orgs/{orgId}/revoke-credentials',
+    tag: PLATFORM_TAG,
+    summary: 'Revoke every badge of a suspended organization',
+    description:
+      'As `cli.js revoke-org-credentials`: each badge is revoked with its audit event, and the worker re-signs the status lists. The owners are emailed the reason.',
+    auth: PLATFORM,
+    body: revokeOrgCredentialsInput,
+    responses: [ok(z.object({ id: z.uuid(), revoked: z.number().int() }))],
+  },
+
+  // ---- moderation (design plan §6.5) ----
+  {
+    method: 'GET',
+    path: '/platform/moderation/summary',
+    tag: MODERATION_TAG,
+    summary: 'How much waits for review',
+    auth: PLATFORM,
+    responses: [ok(moderationSummarySchema)],
+  },
+  {
+    method: 'GET',
+    path: '/platform/moderation/items',
+    tag: MODERATION_TAG,
+    summary: 'The moderation queue',
+    description:
+      'Pending items, oldest first: the current text and images of published achievements, issuers and organization names, anything reported, and anything a badge waits for. With `status=cleared` or `removed`, decided items, newest first.',
+    auth: PLATFORM,
+    query: moderationItemsQuery,
+    responses: [ok(moderationItemPageSchema)],
+  },
+  {
+    method: 'GET',
+    path: '/platform/moderation/items/{itemId}/image',
+    tag: MODERATION_TAG,
+    summary: 'An image item, blurred unless asked',
+    description:
+      'The 512 px PNG, blurred beyond recognition unless `view=full`. Served inline and never cached.',
+    auth: PLATFORM,
+    query: z.object({ view: z.enum(['blurred', 'full']).optional() }),
+    responses: [file('image/png', 'The image')],
+  },
+  {
+    method: 'POST',
+    path: '/platform/moderation/items/{itemId}/clear',
+    tag: MODERATION_TAG,
+    summary: 'Clear an item: publish it',
+    description:
+      'Badges awarded to members while it waited become public once nothing else holds them. The owners are emailed.',
+    auth: PLATFORM,
+    body: moderationClearInput,
+    responses: [ok(moderationItemSchema)],
+  },
+  {
+    method: 'POST',
+    path: '/platform/moderation/items/{itemId}/remove',
+    tag: MODERATION_TAG,
+    summary: 'Remove an item',
+    description:
+      'A removed image’s permanent URL answers with an “Image removed” placeholder, so badges that refer to it still verify; the same image uploaded again stays removed. Removed text is never shown. The owners are emailed the reason.',
+    auth: PLATFORM,
+    body: moderationReasonInput,
+    responses: [ok(moderationItemSchema)],
+  },
+  {
+    method: 'POST',
+    path: '/platform/achievements/{achievementId}/unpublish',
+    tag: MODERATION_TAG,
+    summary: 'Unpublish an achievement',
+    description:
+      'It is archived and can’t be awarded or restored by the organization; its page answers 410 and its badges’ pages leave its details out. The owners are emailed the reason.',
+    auth: PLATFORM,
+    body: moderationReasonInput,
+    responses: [ok(z.object({ id: z.uuid(), removedAt: z.string().nullable() }))],
+  },
+  {
+    method: 'POST',
+    path: '/platform/achievements/{achievementId}/reinstate',
+    tag: MODERATION_TAG,
+    summary: 'Put an unpublished achievement back (archived)',
+    auth: PLATFORM,
+    responses: [ok(z.object({ id: z.uuid(), removedAt: z.string().nullable() }))],
+  },
+  {
+    method: 'POST',
+    path: '/platform/users/{userId}/disable',
+    tag: MODERATION_TAG,
+    summary: 'Disable an account',
+    description:
+      'Its sessions end and it can’t sign in until enabled again. Not a platform admin’s, and not your own. The person is emailed the reason; with `orgId`, the event goes in that organization’s audit log and its owners are told.',
+    auth: PLATFORM,
+    body: disableUserInput,
+    responses: [ok(z.object({ id: z.uuid(), disabledAt: z.string().nullable() }))],
+  },
+  {
+    method: 'POST',
+    path: '/platform/users/{userId}/enable',
+    tag: MODERATION_TAG,
+    summary: 'Enable a disabled account',
+    auth: PLATFORM,
+    responses: [ok(z.object({ id: z.uuid(), disabledAt: z.string().nullable() }))],
+  },
+  {
+    method: 'GET',
+    path: '/platform/reports',
+    tag: MODERATION_TAG,
+    summary: 'Reports from public pages',
+    description: 'Newest first, each with the content the reported page shows.',
+    auth: PLATFORM,
+    query: reportsQuery,
+    responses: [ok(contentReportPageSchema)],
+  },
+  {
+    method: 'POST',
+    path: '/platform/reports/{reportId}/resolve',
+    tag: MODERATION_TAG,
+    summary: 'Resolve or dismiss a report',
+    auth: PLATFORM,
+    body: resolveReportInput,
+    responses: [ok(contentReportSchema)],
   },
 ];
 

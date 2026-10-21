@@ -9,7 +9,7 @@ import {
 } from '@credforge/db';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { createAuthMiddleware, isAPIError } from 'better-auth/api';
+import { APIError, createAuthMiddleware, isAPIError } from 'better-auth/api';
 import { twoFactor } from 'better-auth/plugins';
 import type { Logger } from 'pino';
 import { type AuditRequestInfo, recordAudit } from '../audit/audit';
@@ -209,6 +209,8 @@ export function createAuth({ config, db, outbox, log }: AuthDependencies) {
     user: {
       additionalFields: {
         isPlatformAdmin: { type: 'boolean', required: false, defaultValue: false, input: false },
+        /** Set by a platform admin (design plan §6.5): no sign-in, no session. */
+        disabledAt: { type: 'date', required: false, input: false },
       },
       /**
        * SIGNUP_MODE=invite: only people with a pending invitation, or who were awarded a badge
@@ -309,6 +311,20 @@ export function createAuth({ config, db, outbox, log }: AuthDependencies) {
       },
       session: {
         create: {
+          // A disabled account gets no session, whichever way it signs in (design plan §6.5).
+          before: async (data) => {
+            const [owner] = await db
+              .select({ disabledAt: user.disabledAt })
+              .from(user)
+              .where(eq(user.id, data.userId as string));
+            if (owner?.disabledAt) {
+              throw new APIError('FORBIDDEN', {
+                code: 'ACCOUNT_DISABLED',
+                message: 'This account is disabled. Write to the people who run this site.',
+              });
+            }
+            return { data };
+          },
           after: async (created, ctx) => {
             const hook = ctx as HookContext | null;
             // A replacement for an existing session (enabling or disabling 2FA), not a sign-in.

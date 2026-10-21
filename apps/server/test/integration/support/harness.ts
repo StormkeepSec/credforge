@@ -17,6 +17,7 @@ import type { EmailMessage } from '../../../src/email/transport';
 import { createLocalStorage } from '../../../src/files/storage';
 import type { DomainChecker } from '../../../src/issuers/domain';
 import { createQueues } from '../../../src/jobs';
+import { backfillModerationItems } from '../../../src/moderation/backfill';
 import { createQueueClient } from '../../../src/queue';
 import { FetchError } from '../../../src/verify/fetch';
 
@@ -63,6 +64,7 @@ export async function createTestEnvironment(
   await migrateDatabase(owner.db, MIGRATIONS_DIR);
   // As `migrate` does: a one-time step after the SQL migrations (nothing to seal in a new database).
   await sealEarlierAuditEvents(owner.pool);
+  await backfillModerationItems(owner.db, { review: 'untrusted', blocklist: { terms: [] } });
   let boss: PgBoss | undefined;
   if (options.queue) {
     // The job queue, installed as the owner like `migrate` does, used through the app role.
@@ -79,6 +81,8 @@ export async function createTestEnvironment(
 
   const processEnv: Record<string, string> = {
     NODE_ENV: 'test',
+    // Most suites test other things on content that is public at once; moderation.test.ts sets it.
+    MODERATION_REVIEW: 'off',
     PUBLIC_BASE_URL: BASE_URL,
     DATABASE_URL: appUrl,
     MIGRATION_DATABASE_URL: ownerUrl,

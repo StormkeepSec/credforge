@@ -11,6 +11,7 @@ import {
 } from '@credforge/ob3';
 import { type KeyEncryption, signingKeyAad } from '../crypto/key-encryption';
 import { type FileRow, imageSet } from '../files/service';
+import { contentReview, type ReviewLookup } from '../moderation/service';
 import { domainStatus } from './domain';
 
 export type IssuerRow = typeof issuer.$inferSelect;
@@ -95,6 +96,7 @@ export function serializeIssuer(
   row: IssuerRow,
   keys: SigningKeyRow[],
   files: Map<string, FileRow>,
+  reviews: ReviewLookup,
 ): IssuerResponse {
   const logo = row.imageFileId ? files.get(row.imageFileId) : undefined;
   return {
@@ -106,6 +108,7 @@ export function serializeIssuer(
     email: row.email,
     description: row.description,
     logo: logo ? imageSet(publicBaseUrl, logo) : null,
+    review: contentReview(reviews, row),
     keys: keys.filter((key) => key.issuerId === row.id).map(serializeKey),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

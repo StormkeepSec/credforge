@@ -3,7 +3,7 @@ import { achievement, and, credential, eq, issuer, organization, statusList } fr
 import { bakePng, bakeSvg, type CredentialVerification } from '@credforge/ob3';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import QRCode from 'qrcode';
-import { achievementDocument, achievementUrl, snapshotOf } from '../achievements/service';
+import { achievementDocument, achievementUrl } from '../achievements/service';
 import { isUuid } from '../api/errors';
 import type { RateLimiter } from '../api/rate-limit';
 import { isSameOrigin } from '../api/v1';
@@ -17,11 +17,16 @@ import {
 import { type FileRow, imageSet, loadFiles } from '../files/service';
 import { verifiedHost } from '../issuers/domain';
 import { issuerUrl } from '../issuers/service';
+import { type AchievementText, achievementText, issuerText } from '../moderation/content';
+import { placeholderPng, placeholderSvg } from '../moderation/placeholders';
+import { reportFormToken } from '../moderation/reports';
+import { imageItems, publicImage, publicText, statusOf } from '../moderation/service';
 import { type AccountView, accountView } from '../recipients/ownership';
 import { changeVisibility, recipientActing } from '../recipients/service';
 import type { Services } from '../services';
 import { verifyLocalCredential } from '../verify/local';
 import type { PublicAssets } from './assets';
+import type { ReportFormProps } from './components/report-form';
 import {
   asRecord,
   asString,
@@ -34,9 +39,11 @@ import { UPLOAD_CSP } from './image-routes';
 import { negotiate } from './negotiate';
 import { AchievementPage } from './pages/achievement';
 import { CertificatePage } from './pages/certificate';
-import { CredentialPage } from './pages/credential';
+import { CredentialPage, type CredentialReview } from './pages/credential';
 import { ErasedCredentialPage } from './pages/erased';
+import { RemovedAchievementPage } from './pages/removed';
 import { TooManyRequestsPage } from './pages/too-many';
+import { reportPath } from './report-routes';
 
 /** JSON first for verifiers that send no Accept header (or `*\/*`); browsers ask for HTML. */
 const DOCUMENT_OFFERS = [
@@ -164,6 +171,40 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
       : undefined;
   }
 
+  /** What the people who run the site held or removed of the badge (design plan §6.5). */
+  async function reviewOf(row: CredentialRow): Promise<CredentialReview> {
+    const [owner] = await db
+      .select({ removedAt: achievement.removedAt })
+      .from(achievement)
+      .where(eq(achievement.id, row.achievementId));
+    const status = row.imageFileId
+      ? statusOf((await imageItems(db, [row.imageFileId])).get(row.imageFileId))
+      : 'cleared';
+    return { image: status, achievementRemoved: Boolean(owner?.removedAt) };
+  }
+
+  /** A badge hidden by its recipient, or carrying content that still waits for review. */
+  const isPrivate = (row: CredentialRow) =>
+    row.visibility === 'hidden' || row.heldItemIds.length > 0;
+
+  const siteName = new URL(base).host;
+  const reportForm = (type: 'credential' | 'achievement', id: string): ReportFormProps => ({
+    action: reportPath(type, id),
+    token: reportFormToken(config.authSecret, { type, id }),
+    abuseEmail: config.abuseEmail,
+    siteName,
+  });
+
+  /** The issuer's name as public pages show it: its last cleared text (null: none yet). */
+  async function publicIssuerName(row: typeof issuer.$inferSelect): Promise<string | null> {
+    const shown = await publicText(
+      db,
+      { type: 'issuer', id: row.id, itemId: row.textItemId },
+      issuerText(row),
+    );
+    return shown.text?.name ?? null;
+  }
+
   /**
    * 410 Gone for a credential whose recipient's data was erased (design plan §12.1): a page
    * naming only the issuer and the achievement, or a problem document for verifiers.
@@ -187,11 +228,23 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
         }),
       );
     }
-    const [names] = await db
-      .select({ issuerName: issuer.name, achievementName: achievement.name })
+    // Only names public pages may show: their cleared versions (design plan §6.5).
+    const [rows] = await db
+      .select({ issuer, achievement })
       .from(issuer)
       .innerJoin(achievement, eq(achievement.id, row.achievementId))
       .where(eq(issuer.id, row.issuerId));
+    const shown =
+      rows &&
+      (await publicText(
+        db,
+        { type: 'achievement', id: rows.achievement.id, itemId: rows.achievement.textItemId },
+        achievementText(rows.achievement),
+      ));
+    const names = rows && {
+      issuerName: await publicIssuerName(rows.issuer),
+      achievementName: rows.achievement.removedAt ? null : (shown?.text?.name ?? null),
+    };
     return sendHtml(
       reply,
       renderDocument(
@@ -282,12 +335,13 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
         message: `Available as ${DOCUMENT_OFFERS.join(', ')}`,
       });
     }
-    // A hidden page answers like a missing one, except to its recipient.
-    if (row.visibility === 'hidden' && !owner) return reply.callNotFound();
+    // A hidden page, or one whose content waits for review, answers like a missing one, except to
+    // its recipient.
+    if (isPrivate(row) && !owner) return reply.callNotFound();
     // A signed-in visitor's page can carry a refreshed session cookie: never cache it.
     reply.header(
       'cache-control',
-      row.visibility === 'hidden' || owner || account ? 'private, no-store' : 'public, max-age=60',
+      isPrivate(row) || owner || account ? 'private, no-store' : 'public, max-age=60',
     );
 
     if (type !== 'text/html') {
@@ -296,7 +350,7 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
       return reply.type(`${type}; charset=utf-8`).send(JSON.stringify(row.document));
     }
 
-    const view = credentialView(base, row, await imageOf(row));
+    const view = credentialView(base, row, await imageOf(row), await reviewOf(row));
     // Cached per list version: a re-signed list (after a revocation) is checked afresh.
     const [list] = row.statusListId
       ? await db
@@ -338,7 +392,7 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
           }
           notice={query.link === 'expired' && !owner ? 'link_expired' : null}
           issuerVerifiedHost={issuerRow ? verifiedHost(issuerRow) : null}
-          reportEmail={config.abuseEmail}
+          report={reportForm('credential', row.id)}
           orgStatus={issuerRow?.orgStatus ?? 'active'}
         />,
       ),
@@ -386,7 +440,7 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
     }
     const row: LiveCredentialRow = { ...found, document: found.document };
     const { owner, account } = await recipientOf(request, reply, row);
-    if (row.visibility === 'hidden' && !owner) {
+    if (isPrivate(row) && !owner) {
       await reply.callNotFound();
       return null;
     }
@@ -394,7 +448,7 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
     reply.header('x-robots-tag', 'noindex');
     reply.header(
       'cache-control',
-      row.visibility === 'hidden' || owner || account ? 'private, no-store' : 'public, max-age=300',
+      isPrivate(row) || owner || account ? 'private, no-store' : 'public, max-age=300',
     );
     return row;
   }
@@ -413,12 +467,36 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
   });
 
   /** The badge image with the signed credential baked in (an `iTXt` chunk; no re-encoding). */
+  /**
+   * Baked images leave out what the people who run the site hold or removed (design plan §6.5):
+   * while the badge image waits for review there is nothing to download yet; once it (or the
+   * achievement) is removed, the credential is baked into the "removed" placeholder, so the badge
+   * can still be kept and checked.
+   */
+  async function bakeable(reply: FastifyReply, row: LiveCredentialRow) {
+    const review = await reviewOf(row);
+    if (review.image === 'pending') {
+      reply.code(409).header('cache-control', 'no-store').type('text/plain; charset=utf-8');
+      await reply.send(
+        'The badge image is waiting for review by the people who run this site. Download it once it is cleared.',
+      );
+      return null;
+    }
+    return { removed: review.image === 'removed' || review.achievementRemoved };
+  }
+
   app.get('/credentials/:id/badge.png', async (request, reply) => {
     const row = await downloadable(request, reply);
     if (!row) return reply;
+    const state = await bakeable(reply, row);
+    if (!state) return reply;
     const image = await imageOf(row);
     const key = image?.mimeType === 'image/svg+xml' ? image.variants['512']?.key : image?.key;
-    const bytes = key ? await storage.get(key) : null;
+    const bytes = state.removed
+      ? await placeholderPng('removed', 'original')
+      : key
+        ? await storage.get(key)
+        : null;
     if (!bytes) return reply.callNotFound();
     reply.header('content-disposition', `attachment; filename="${fileName(row, 'png')}"`);
     reply.header('content-security-policy', UPLOAD_CSP);
@@ -432,13 +510,15 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
     if (!row) return reply;
     const image = await imageOf(row);
     if (image?.mimeType !== 'image/svg+xml') return reply.callNotFound();
-    const bytes = await storage.get(image.key);
-    if (!bytes) return reply.callNotFound();
+    const state = await bakeable(reply, row);
+    if (!state) return reply;
+    const svg = state.removed
+      ? placeholderSvg('removed')
+      : (await storage.get(image.key))?.toString('utf8');
+    if (!svg) return reply.callNotFound();
     reply.header('content-disposition', `attachment; filename="${fileName(row, 'svg')}"`);
     reply.header('content-security-policy', UPLOAD_CSP);
-    return reply
-      .type('image/svg+xml')
-      .send(bakeSvg(bytes.toString('utf8'), row.document, { replace: true }));
+    return reply.type('image/svg+xml').send(bakeSvg(svg, row.document, { replace: true }));
   });
 
   app.get('/credentials/:id/certificate', async (request, reply) => {
@@ -453,7 +533,7 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
           url={`${url}/certificate`}
           credentialUrl={url}
           stylesheet={assets.stylesheet}
-          credential={credentialView(base, row, await imageOf(row))}
+          credential={credentialView(base, row, await imageOf(row), await reviewOf(row))}
           qrSvg={qrSvg}
         />,
       ),
@@ -481,25 +561,63 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
       });
     }
     reply.header('cache-control', 'public, max-age=300');
-    const image = row.achievement.imageFileId
-      ? (await loadFiles(db, [row.achievement.imageFileId])).get(row.achievement.imageFileId)
-      : undefined;
     const url = achievementUrl(base, row.achievement.id);
     const pageUrl = issuerUrl(base, row.issuer.id);
+    const issuerName = await publicIssuerName(row.issuer);
+
+    // Unpublished by a platform admin (design plan §6.5).
+    if (row.achievement.removedAt) {
+      reply.code(410);
+      if (type !== 'text/html') {
+        reply.header('access-control-allow-origin', '*');
+        return reply.type('application/problem+json; charset=utf-8').send(
+          JSON.stringify({
+            type: 'about:blank',
+            title: 'Achievement removed',
+            status: 410,
+            detail: 'The people who run this site removed this achievement.',
+            code: 'removed_by_platform',
+          }),
+        );
+      }
+      return sendHtml(
+        reply,
+        renderDocument(
+          <RemovedAchievementPage
+            url={url}
+            stylesheet={assets.stylesheet}
+            issuer={{ name: issuerName ?? 'The issuer', pageUrl }}
+          />,
+        ),
+      );
+    }
+
+    // Only cleared text and images are public: the last cleared version while an edit waits.
+    const shown = await publicText<AchievementText>(
+      db,
+      { type: 'achievement', id: row.achievement.id, itemId: row.achievement.textItemId },
+      achievementText(row.achievement),
+    );
+    const image = await publicImage(db, {
+      type: 'achievement',
+      id: row.achievement.id,
+      fileId: row.achievement.imageFileId,
+    });
 
     if (type !== 'text/html') {
+      if (!shown.text) return reply.callNotFound();
       reply.header('access-control-allow-origin', '*');
       reply.header('cross-origin-resource-policy', 'cross-origin');
       return reply.type(`${type}; charset=utf-8`).send(
         JSON.stringify(
-          achievementDocument(base, row.achievement, image, {
+          achievementDocument(base, { ...row.achievement, ...shown.text }, image, {
             id: pageUrl,
-            name: row.issuer.name,
+            name: issuerName ?? 'Issuer',
           }),
         ),
       );
     }
-    const snapshot = snapshotOf(row.achievement);
+    const snapshot = shown.text;
     const images = image ? imageSet(base, image) : null;
     return sendHtml(
       reply,
@@ -508,24 +626,27 @@ export const publicCredentialRoutes: FastifyPluginAsync<{
           url={url}
           stylesheet={assets.stylesheet}
           achievement={{
-            name: snapshot.name,
-            description: snapshot.description,
-            typeLabel: achievementTypeLabel(snapshot.achievementType),
-            criteriaNarrative: snapshot.criteriaNarrative,
-            criteriaUrl: snapshot.criteriaUrl,
-            tags: snapshot.tags,
-            alignments: snapshot.alignments.map((alignment) => ({
+            name: snapshot?.name ?? 'Achievement waiting for review',
+            description: snapshot?.description ?? '',
+            typeLabel: achievementTypeLabel(row.achievement.achievementType),
+            criteriaNarrative: snapshot?.criteriaNarrative ?? null,
+            criteriaUrl: snapshot?.criteriaUrl ?? null,
+            tags: snapshot?.tags ?? [],
+            alignments: (snapshot?.alignments ?? []).map((alignment) => ({
               targetName: alignment.targetName,
               targetUrl: alignment.targetUrl,
               ...(alignment.targetFramework && { targetFramework: alignment.targetFramework }),
               ...(alignment.targetCode && { targetCode: alignment.targetCode }),
             })),
             archived: row.achievement.status === 'archived',
+            review: shown.current ? null : snapshot ? 'update' : 'new',
           }}
-          image={images ? { url: images.url512, alt: `${snapshot.name} badge` } : null}
+          image={
+            images ? { url: images.url512, alt: `${snapshot?.name ?? 'Achievement'} badge` } : null
+          }
           ogImage={images?.ogUrl ? { url: images.ogUrl, width: 1200, height: 630 } : null}
-          issuer={{ name: row.issuer.name, pageUrl }}
-          reportEmail={config.abuseEmail}
+          issuer={{ name: issuerName ?? 'An issuer waiting for review', pageUrl }}
+          report={reportForm('achievement', row.achievement.id)}
           orgStatus={row.orgStatus}
         />,
       ),

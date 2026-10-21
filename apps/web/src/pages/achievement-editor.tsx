@@ -15,6 +15,7 @@ import { ConfirmButton } from '../components/confirm';
 import { AchievementStatusBadge } from '../components/delivery';
 import { ImagePicker, type PickedImage } from '../components/image-picker';
 import { isWritable, OrgStatusBanner } from '../components/org-status';
+import { AchievementReview } from '../components/review';
 import { Button } from '../components/ui/button';
 import {
   Card,
@@ -570,6 +571,7 @@ function StatusCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
+        <AchievementReview achievement={achievement} />
         {error && <Alert variant="error">{errorMessage(error)}</Alert>}
         {achievement.status === 'draft' && !achievement.image && (
           <p className="text-sm text-muted-foreground">Add a badge image before publishing.</p>
@@ -632,7 +634,7 @@ function StatusCard({
               </ConfirmButton>
             </>
           )}
-          {achievement.status === 'archived' && (
+          {achievement.status === 'archived' && !achievement.removed && (
             <Button
               variant="outline"
               onClick={() => action.mutate('restore')}

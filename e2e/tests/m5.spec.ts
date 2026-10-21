@@ -85,13 +85,16 @@ test.describe('public pages', () => {
     }
   });
 
-  test('"Report a problem" on a badge page', async ({ page }) => {
+  test('"Report a problem" on a badge page, with the abuse address', async ({ page }) => {
     const { credentialId } = fixtures();
     await page.goto(`/credentials/${credentialId}`);
-    const report = page.getByRole('link', { name: 'Report a problem' });
-    await expect(report).toHaveAttribute('href', /^mailto:abuse@/);
-    expect(decodeURIComponent((await report.getAttribute('href')) ?? '')).toContain(
-      `/credentials/${credentialId}`,
+    // The form folds out on the page itself (moderation.spec.ts sends one).
+    await page.getByText('Report a problem', { exact: true }).click();
+    const form = page.locator(`form[action="/report/credential/${credentialId}"]`);
+    await expect(form.getByRole('radio', { name: /Child sexual abuse/ })).toBeVisible();
+    await expect(form.getByRole('link', { name: /^abuse@/ })).toHaveAttribute(
+      'href',
+      /^mailto:abuse@/,
     );
   });
 

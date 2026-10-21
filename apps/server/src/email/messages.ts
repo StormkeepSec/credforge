@@ -176,13 +176,18 @@ export function orgSuspendedMessage(
   to: string,
   orgName: string,
   reason: string | null,
+  appeal: Appeal = {},
 ): EmailMessage {
-  return render('org-suspended', to, `${orgName} is suspended on credforge`, {
-    paragraphs: [
-      `${orgName} is suspended. It can't award badges or send email until it is reinstated. Badges it already awarded stay verifiable.`,
-      ...(reason ? [`Reason: ${reason}`] : []),
-    ],
-  });
+  return withAppeal(
+    render('org-suspended', to, `${orgName} is suspended on credforge`, {
+      paragraphs: [
+        `${orgName} is suspended. It can't award badges or send email until it is reinstated. Badges it already awarded stay verifiable.`,
+        ...(reason ? [`Reason: ${reason}`] : []),
+        appealLine(appeal),
+      ],
+    }),
+    appeal,
+  );
 }
 
 export interface AwardMessageInput {
@@ -255,4 +260,183 @@ function formatDate(date: Date): string {
     day: 'numeric',
     timeZone: 'UTC',
   });
+}
+
+// ---- moderation (design plan §6.5) ----
+
+/**
+ * Who to answer to about a moderation decision: replies go to the instance's abuse address
+ * (ABUSE_EMAIL) when it has one.
+ */
+export interface Appeal {
+  abuseEmail?: string;
+}
+
+function appealLine(appeal: Appeal): string {
+  return appeal.abuseEmail
+    ? `If you think this is a mistake, reply to this email (it goes to ${appeal.abuseEmail}) and say why.`
+    : 'If you think this is a mistake, reply to the people who run this credforge instance and say why.';
+}
+
+function withAppeal(message: EmailMessage, appeal: Appeal): EmailMessage {
+  return appeal.abuseEmail ? { ...message, replyTo: appeal.abuseEmail } : message;
+}
+
+/** Content that waited for review is published. */
+export function contentClearedMessage(
+  to: string,
+  orgName: string,
+  what: string[],
+  url: string,
+): EmailMessage {
+  return render('moderation-cleared', to, `Reviewed and published: ${orgName}`, {
+    paragraphs: [
+      `The people who run this credforge instance reviewed and published content of ${orgName}:`,
+      ...what.map((item) => `• ${item}`),
+      'Badges that carry it can now be awarded to anyone your organization may award to.',
+    ],
+    action: { label: 'Open credforge', url },
+  });
+}
+
+/** An image or text a platform admin took down. */
+export function contentRemovedMessage(
+  to: string,
+  orgName: string,
+  what: string,
+  reason: string,
+  appeal: Appeal,
+): EmailMessage {
+  return withAppeal(
+    render('moderation-removed', to, `Removed from ${orgName}: ${what}`, {
+      paragraphs: [
+        `The people who run this credforge instance removed ${what} of ${orgName}. It is no longer shown on public pages; badges that carry it can't be awarded until you change it.`,
+        `Reason: ${reason}`,
+        appealLine(appeal),
+      ],
+    }),
+    appeal,
+  );
+}
+
+export function achievementUnpublishedMessage(
+  to: string,
+  orgName: string,
+  achievementName: string,
+  reason: string,
+  appeal: Appeal,
+): EmailMessage {
+  return withAppeal(
+    render('achievement-unpublished', to, `Unpublished: ${achievementName}`, {
+      paragraphs: [
+        `The people who run this credforge instance unpublished the achievement ${achievementName} of ${orgName}. Its page no longer shows it, its badges' pages no longer show its details, and it can't be awarded.`,
+        `Reason: ${reason}`,
+        appealLine(appeal),
+      ],
+    }),
+    appeal,
+  );
+}
+
+export function achievementReinstatedMessage(
+  to: string,
+  orgName: string,
+  achievementName: string,
+  url: string,
+): EmailMessage {
+  return render('achievement-reinstated', to, `Put back: ${achievementName}`, {
+    paragraphs: [
+      `The people who run this credforge instance put back the achievement ${achievementName} of ${orgName}. It is archived: restore it in credforge to award it again.`,
+    ],
+    action: { label: 'Open credforge', url },
+  });
+}
+
+export function orgCredentialsRevokedMessage(
+  to: string,
+  orgName: string,
+  count: number,
+  reason: string,
+  appeal: Appeal,
+): EmailMessage {
+  return withAppeal(
+    render('org-credentials-revoked', to, `Badges revoked: ${orgName}`, {
+      paragraphs: [
+        `The people who run this credforge instance revoked the ${count} ${count === 1 ? 'badge' : 'badges'} ${orgName} had awarded. They now check as revoked everywhere.`,
+        `Reason: ${reason}`,
+        appealLine(appeal),
+      ],
+    }),
+    appeal,
+  );
+}
+
+export function accountDisabledMessage(
+  to: string,
+  name: string,
+  reason: string,
+  appeal: Appeal,
+): EmailMessage {
+  return withAppeal(
+    render('account-disabled', to, 'Your credforge account is disabled', {
+      paragraphs: [
+        `Hi ${name},`,
+        'The people who run this credforge instance disabled your account. You were signed out everywhere and can’t sign in until it is enabled again. Badges awarded to you are not affected.',
+        `Reason: ${reason}`,
+        appealLine(appeal),
+      ],
+    }),
+    appeal,
+  );
+}
+
+export function accountEnabledMessage(to: string, name: string, url: string): EmailMessage {
+  return render('account-enabled', to, 'Your credforge account is enabled again', {
+    paragraphs: [`Hi ${name},`, 'Your account is enabled again. You can sign in as before.'],
+    action: { label: 'Sign in', url },
+  });
+}
+
+/** To each platform admin: a report from a public page's form. */
+export function reportReceivedMessage(input: {
+  to: string;
+  category: string;
+  pageUrl: string;
+  details: string | null;
+  /** A child-safety report held the page's images at once. */
+  imagesHeld: boolean;
+  queueUrl: string;
+}): EmailMessage {
+  return render('report-received', input.to, `Report: ${input.category}`, {
+    paragraphs: [
+      `Someone reported ${input.pageUrl} as: ${input.category}.`,
+      ...(input.details ? [`What they wrote: ${input.details}`] : []),
+      ...(input.imagesHeld
+        ? [
+            'Its images were held for review at once: public pages show a placeholder until you decide. Review them in the moderation queue, where images stay blurred until you choose to see them.',
+          ]
+        : []),
+    ],
+    action: { label: 'Open the moderation queue', url: input.queueUrl },
+  });
+}
+
+/** To an org's owners: the account of one of its members was disabled. */
+export function memberDisabledMessage(
+  to: string,
+  orgName: string,
+  email: string,
+  reason: string,
+  appeal: Appeal,
+): EmailMessage {
+  return withAppeal(
+    render('member-disabled', to, `Account disabled: ${email}`, {
+      paragraphs: [
+        `The people who run this credforge instance disabled the account ${email}, a member of ${orgName}. It was signed out everywhere and can’t sign in until it is enabled again.`,
+        `Reason: ${reason}`,
+        appealLine(appeal),
+      ],
+    }),
+    appeal,
+  );
 }

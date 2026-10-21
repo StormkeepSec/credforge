@@ -5,6 +5,7 @@ import {
   Award,
   BadgeCheck,
   Building2,
+  Flag,
   Inbox,
   KeyRound,
   LayoutDashboard,
@@ -132,12 +133,25 @@ function Sidebar({
             </Link>
           </li>
           {me.user.isPlatformAdmin && (
-            <li>
-              <Link to="/app/platform" className={navLink} onClick={onNavigate}>
-                <ShieldCheck aria-hidden="true" />
-                Platform
-              </Link>
-            </li>
+            <>
+              <li>
+                <Link
+                  to="/app/platform"
+                  className={navLink}
+                  onClick={onNavigate}
+                  activeOptions={{ exact: true }}
+                >
+                  <ShieldCheck aria-hidden="true" />
+                  Platform
+                </Link>
+              </li>
+              <li>
+                <Link to="/app/platform/moderation" className={navLink} onClick={onNavigate}>
+                  <Flag aria-hidden="true" />
+                  Moderation
+                </Link>
+              </li>
+            </>
           )}
         </ul>
       </div>

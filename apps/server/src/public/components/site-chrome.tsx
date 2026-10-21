@@ -70,25 +70,6 @@ export function SitePage({ children }: { children: ReactNode }) {
 }
 
 /**
- * "Report a problem" (design plan §6.3, decision 37): an email to the instance's abuse address
- * that names the page. Shown on public badge, achievement and issuer pages when ABUSE_EMAIL is set.
- */
-export function ReportProblem({ email, pageUrl }: { email: string | undefined; pageUrl: string }) {
-  if (!email) return null;
-  const subject = `Report: ${pageUrl}`;
-  const body = `Page: ${pageUrl}\n\nWhat is wrong with it:\n`;
-  const href = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  return (
-    <p className="text-sm text-ink-muted">
-      Impersonation, phishing or a badge that shouldn’t be here?{' '}
-      <a href={href} className="font-semibold text-signal-strong underline underline-offset-4">
-        Report a problem
-      </a>
-    </p>
-  );
-}
-
-/**
  * The issuer's website, worded as precisely as the brand guardrails ask: "verified" only when the
  * issuer proved control of that host (§6.3), otherwise "self-reported".
  */

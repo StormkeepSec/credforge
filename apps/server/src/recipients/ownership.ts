@@ -8,6 +8,15 @@ import { confirmedAddresses } from './addresses';
 const SESSION_COOKIE = /(?:^|;\s*)(?:__Secure-)?credforge\.session_token=/;
 
 /**
+ * Whether the request may be signed in by its cookies: it carries a session cookie and no
+ * Authorization header (as in the API, a request with one is never signed in by cookies).
+ * Public pages check this first, so visitors without a session cost no lookup.
+ */
+export function mayHaveSession(request: FastifyRequest): boolean {
+  return !request.headers.authorization && SESSION_COOKIE.test(request.headers.cookie ?? '');
+}
+
+/**
  * Who is looking at a badge's public page, as far as accounts go (design plan §8.8):
  *
  * - `owner`: signed in, ready (email verified, second factor passed where needed), with the
@@ -26,10 +35,7 @@ export async function accountView(
   reply: FastifyReply,
   row: Pick<CredentialRow, 'recipientEmail'>,
 ): Promise<AccountView> {
-  // As in the API, a request carrying an Authorization header is never signed in by cookies.
-  if (request.headers.authorization || !SESSION_COOKIE.test(request.headers.cookie ?? '')) {
-    return null;
-  }
+  if (!mayHaveSession(request)) return null;
   const context = await resolveAuth(services, request, reply);
   if (!context?.user.emailVerified || context.mfa.state !== 'ok') return null;
   const addresses = await confirmedAddresses(services.db, context.user);

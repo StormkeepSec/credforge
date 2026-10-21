@@ -38,6 +38,7 @@ import { OrgMembersPage } from './pages/org-members';
 import { OrgOverviewPage } from './pages/org-overview';
 import { OrgSettingsPage } from './pages/org-settings';
 import { PlatformPage } from './pages/platform';
+import { PlatformModerationPage } from './pages/platform-moderation';
 import { SignupPage } from './pages/signup';
 import { TwoFactorSetupPage } from './pages/two-factor-setup';
 
@@ -379,6 +380,15 @@ const platformRoute = createRoute({
   component: PlatformPage,
 });
 
+const platformModerationRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/platform/moderation',
+  beforeLoad: ({ context }) => {
+    if (!context.me.user.isPlatformAdmin) throw redirect({ to: '/app' });
+  },
+  component: PlatformModerationPage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   signupRoute,
@@ -410,6 +420,7 @@ const routeTree = rootRoute.addChildren([
     accountRoute,
     twoFactorSetupRoute,
     platformRoute,
+    platformModerationRoute,
   ]),
 ]);
 

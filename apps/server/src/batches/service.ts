@@ -50,6 +50,7 @@ import {
 } from '../credentials/service';
 import type { Storage } from '../files/storage';
 import type { JobQueue } from '../jobs/enqueue';
+import { achievementContent, CONTENT_IN_REVIEW_RULE } from '../moderation/awards';
 import { effectiveDailySendLimit } from '../orgs/service';
 import {
   CSV_BOM,
@@ -78,6 +79,7 @@ const STOPPING_CODES = new Set([
   'achievement_not_active',
   'issuer_not_ready',
   'send_limit_reached',
+  'content_removed',
 ]);
 
 const invalidCsv = (detail: string) =>
@@ -374,7 +376,8 @@ export async function updateBatch(
 /**
  * Checks every row of a draft (the validation report): each row on its own (`mapRow`), then
  * across rows and against the database: the same email on an earlier row, people who already
- * hold the achievement, and, while the org waits for approval, addresses that aren't members'.
+ * hold the achievement, and, while the org waits for approval or the badge's content waits for
+ * review, addresses that aren't members'.
  */
 export async function validateBatch(tx: Queryable, orgId: string, batchId: string): Promise<void> {
   const [batch] = await tx.select().from(issuanceBatch).where(eq(issuanceBatch.id, batchId));
@@ -384,7 +387,11 @@ export async function validateBatch(tx: Queryable, orgId: string, batchId: strin
     .from(organization)
     .where(eq(organization.id, orgId));
   const pendingOrg = org?.status === 'pending';
-  const allowed = pendingOrg ? await memberAddresses(tx, orgId) : null;
+  // While the badge's content waits for review, only members too (design plan §6.5).
+  const held =
+    !pendingOrg && (await achievementContent(tx, orgId, batch.achievementId)).held.length > 0;
+  const allowed = pendingOrg || held ? await memberAddresses(tx, orgId) : null;
+  const allowedRule = pendingOrg ? PENDING_ORG_RECIPIENT_RULE : CONTENT_IN_REVIEW_RULE;
   const rows = await tx
     .select({ rowNumber: issuanceBatchRow.rowNumber, cells: issuanceBatchRow.cells })
     .from(issuanceBatchRow)
@@ -432,7 +439,7 @@ export async function validateBatch(tx: Queryable, orgId: string, batchId: strin
     if (issues.length > 0) validation = 'invalid';
     else if (allowed && !allowed.has(row.values.email)) {
       validation = 'invalid';
-      issues.push({ field: 'email', message: PENDING_ORG_RECIPIENT_RULE });
+      issues.push({ field: 'email', message: allowedRule });
     } else if (firstSeen.has(row.values.email)) {
       validation = 'duplicate';
       issues.push({

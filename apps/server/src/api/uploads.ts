@@ -1,9 +1,20 @@
 import type { Queryable } from '@credforge/db';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { Config } from '../config';
 import { ImageError, MAX_UPLOAD_BYTES } from '../files/images';
+import { checkUpload, type OrgUploadLimits } from '../files/limits';
 import { type FileRow, type StoreImageInput, storeImage } from '../files/service';
 import type { Storage } from '../files/storage';
 import { ApiError } from './errors';
+import type { RateLimiter } from './rate-limit';
+
+/** What an upload is counted against: the org's hourly upload limit and storage quota (§6.5). */
+export interface UploadGuard {
+  config: Pick<Config, 'orgUploadRateLimit' | 'orgStorageQuotaMb'>;
+  limiter: RateLimiter;
+  org: OrgUploadLimits;
+  reply: Pick<FastifyReply, 'header'>;
+}
 
 /**
  * Image uploads are the raw file as the request body (`PUT …/image` with the file's content
@@ -42,15 +53,21 @@ function uploadedBytes(request: FastifyRequest): Buffer {
   return body;
 }
 
-/** Stores the uploaded image, turning pipeline errors into problem responses. */
+/**
+ * Stores the uploaded image, once it fits the org's upload limits, turning pipeline errors into
+ * problem responses.
+ */
 export async function storeUploadedImage(
   db: Queryable,
   storage: Storage,
   request: FastifyRequest,
   input: Omit<StoreImageInput, 'bytes'>,
+  guard: UploadGuard,
 ): Promise<FileRow> {
+  const bytes = uploadedBytes(request);
+  await checkUpload(db, guard.config, guard.limiter, guard.org, bytes.length, guard.reply);
   try {
-    return await storeImage(db, storage, { ...input, bytes: uploadedBytes(request) });
+    return await storeImage(db, storage, { ...input, bytes });
   } catch (error) {
     if (error instanceof ImageError) {
       if (error.reason === 'too_large') {

@@ -85,8 +85,9 @@ const LOCAL_CREDENTIAL =
   /^\/credentials\/([0-9a-f-]{36})(?:\/(badge\.png|badge\.svg|credential\.json))?\/?$/i;
 
 /**
- * One of this instance's credentials by its URL (or a download's), unless its page is hidden. A
- * credential whose recipient's data was erased has no document left to check (design plan §12.1).
+ * One of this instance's credentials by its URL (or a download's), unless its page is hidden or
+ * held for review. A credential whose recipient's data was erased has no document left to check
+ * (design plan §12.1).
  */
 async function localCredential(
   services: VerifyServices,
@@ -96,10 +97,15 @@ async function localCredential(
   const match = LOCAL_CREDENTIAL.exec(url.pathname);
   if (!match?.[1] || !isUuid(match[1])) return null;
   const [row] = await services.db
-    .select({ document: credential.document, visibility: credential.visibility })
+    .select({
+      document: credential.document,
+      visibility: credential.visibility,
+      heldItemIds: credential.heldItemIds,
+    })
     .from(credential)
     .where(eq(credential.id, match[1].toLowerCase()));
-  if (!row || row.visibility === 'hidden') return null;
+  // Held for review (design plan §6.5): as private as a hidden page.
+  if (!row || row.visibility === 'hidden' || row.heldItemIds.length > 0) return null;
   if (!row.document) {
     throw new ApiError(
       410,

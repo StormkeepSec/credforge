@@ -18,6 +18,7 @@ import {
   testEmail,
 } from '../support/fixtures';
 import { LINKS, mailLink } from '../support/mailpit';
+import { trustOrg } from '../support/moderation';
 import { BASE_URL, MAILPIT_URL, reachable } from '../support/stack';
 
 // Seeds this run's accounts without the UI: Better Auth's API for sign-up and two-step
@@ -120,6 +121,18 @@ setup('seed accounts, an organization and invitations', async ({ playwright }) =
     }),
     seed(SIGNED_IN.invitee, (request) => signUpAndConfirm(request, invitee)),
   ]);
+
+  // The seeded org's content is public at once, as most tests expect: the admin vouches for it
+  // (moderation.spec.ts covers content that waits for review, with orgs of its own).
+  const adminRequest = await playwright.request.newContext({
+    baseURL: BASE_URL,
+    storageState: SIGNED_IN.admin,
+  });
+  try {
+    await trustOrg(adminRequest, ownerResult.org.id);
+  } finally {
+    await adminRequest.dispose();
+  }
 
   // Queued behind the new org's notice to every platform admin, so it can take a while.
   const inviteLink = await mailLink(invitee.email, LINKS.invitation, 60_000);

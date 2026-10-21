@@ -16,6 +16,7 @@ const serverPaths = [
   '/verify',
   '/privacy',
   '/terms',
+  '/report',
   '/.well-known',
 ];
 

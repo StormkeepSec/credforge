@@ -8,9 +8,11 @@ import { loadDevEnvFile } from './dev-env';
 import { enforceMasterKey, enforcePublicBaseUrl } from './instance';
 import { createQueues } from './jobs';
 import { loggerOptions } from './logger';
+import { backfillModerationItems } from './moderation/backfill';
 
 // One-shot, as the database owner (MIGRATION_DATABASE_URL): applies database migrations (and,
-// once, seals recipient details in audit events written before migration 0006), installs or
+// once each, seals recipient details in audit events written before migration 0006 and gives
+// content published before migration 0008 its cleared moderation items), installs or
 // upgrades the job queue schema, (re)grants the app's restricted role, and records
 // PUBLIC_BASE_URL and the master key check. Runs before `app` and `worker` start (docker compose
 // `migrate` service).
@@ -28,6 +30,10 @@ try {
   const sealed = await sealEarlierAuditEvents(pool);
   if (sealed !== null) {
     log.info({ events: sealed }, 'recipient details in earlier audit events sealed (once)');
+  }
+  const backfilled = await backfillModerationItems(db, config.moderation);
+  if (backfilled !== null) {
+    log.info({ items: backfilled }, 'moderation items for content published before 0008 (once)');
   }
 
   const boss = new PgBoss({

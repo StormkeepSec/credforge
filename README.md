@@ -9,8 +9,9 @@
 > verification tool, search and exports) are done. M5's hardening is done (API keys and API docs,
 > rate limits, abuse reports, domain verification, security headers, the landing page, draft
 > privacy policy and terms, encrypted nightly backups with a tested restore), an organization
-> can erase a recipient's data on request, and recipients can sign in to see all their badges in
-> one place (**My badges**); deploying to credforge.app is next. See the
+> can erase a recipient's data on request, recipients can sign in to see all their badges in
+> one place (**My badges**), and platform admins have content moderation (held content, a
+> moderation queue, in-app reports); deploying to credforge.app is next. See the
 > [design plan](docs/design-plan.md) for the architecture and the roadmap.
 
 ## Requirements
@@ -62,7 +63,15 @@ And M5:
 - **Website verification** (Issuer profile): publish a DNS TXT record or a file on the issuer's
   website; public pages then say "Website verified" instead of "self-reported".
 - **Public pages:** the landing page at `/`, `/privacy` and `/terms` (drafts for review), and
-  "Report a problem" on badge, achievement and issuer pages.
+  the "Report a problem" form on badge, achievement and issuer pages.
+- **Moderation** (sidebar → Moderation, platform admins; [docs/abuse-handling.md](docs/abuse-handling.md)):
+  new images and public text of orgs nobody marked trusted wait for review, so public pages show
+  a placeholder (or the version cleared last) and only the org's members can be awarded them; the
+  queue shows them (images blurred until you ask) with reports from public pages, and offers
+  clear, remove, unpublish, suspend, revoke every badge and disable an account. Approving an org on
+  the Platform screen publishes the content it shows. In development everything waits too (the
+  default `MODERATION_REVIEW=untrusted`): approve your org, or mark it trusted, on the Platform
+  screen.
 - **Erase this person's data** (a badge's screen, owners and admins): for a request to delete a
   recipient's data. It first lists what it covers (every badge awarded to that address, badges
   linked to them by a reissue, CSV rows holding it), then revokes the badges for good and removes
@@ -151,8 +160,13 @@ through the column mapping, the validation report, awarding, progress and result
 be running), search and filter the awarded badges, open the bulk revoke panel and the reissue form,
 revoke a badge and check its public page, and use the `/verify` page. The M5 tests create an API
 key (shown once), use it without cookies, revoke it, open the website verification instructions,
-and check the landing page, the draft privacy policy and terms, the "Report a problem" link and the
-API docs (no CSP errors). The erasure test sets up an organization of its own, reviews what erasing
+and check the landing page, the draft privacy policy and terms, the "Report a problem" form and the
+API docs (no CSP errors). The moderation tests have a new org's first content wait for review
+(its public page leaves it out), report it from that page, review it on the Platform screen and in
+the moderation queue (a blurred image shown and blurred again, a removal's reason asked in place,
+clearing), resolve the report and approve the org; and send the report form on a page of its own,
+with a mistake first. The seed marks its own org trusted, so the other tests see their content at
+once. The erasure test sets up an organization of its own, reviews what erasing
 a recipient would cover, confirms it, and checks the erased badge's screen and its public page
 (410). The My badges tests award badges to a new recipient-only account (which lands on My badges),
 hide and show a badge's page, add and confirm an extra address from its Mailpit link, and check the
@@ -237,9 +251,17 @@ This starts `db`, runs `migrate` once, and then starts `app` and `worker`. The a
   client IP (on in production, `AUTH_RATE_LIMIT`), claim and invitation links per client IP
   (`CLAIM_RATE_LIMIT`, 30), verification per client IP (`VERIFY_RATE_LIMIT`, 20) and each API key
   (`API_RATE_LIMIT`, 300). Over a limit: `429` with `Retry-After`. `/status/` is never limited.
-- **Contacts and legal pages.** `ABUSE_EMAIL` adds "Report a problem" to public pages,
-  `SECURITY_EMAIL` serves `/.well-known/security.txt`, and `OPERATOR_NAME` and `PRIVACY_EMAIL`
-  fill in `/privacy` and `/terms`. Those pages are drafts, and say so, until you review them and
+- **Moderation** ([docs/abuse-handling.md](docs/abuse-handling.md)). `MODERATION_REVIEW`
+  (`untrusted` by default: orgs you haven't marked trusted; `all`; `off`) decides whose new
+  images and public text wait for a platform admin. An optional word list
+  (`MODERATION_TEXT_BLOCKLIST_FILE`, one term per line, `=term` for whole words) holds matching
+  text for review; credforge ships none. `ORG_UPLOAD_RATE_LIMIT` (60 an hour) and
+  `ORG_STORAGE_QUOTA_MB` (500) limit each org's uploads, `REPORT_RATE_LIMIT` (10 an hour per
+  client IP) the report form. Cleared images are cached for 10 minutes, so a removed one leaves
+  browsers and nginx within that time.
+- **Contacts and legal pages.** `ABUSE_EMAIL` is offered on the report form and receives owners'
+  replies to moderation emails, `SECURITY_EMAIL` serves `/.well-known/security.txt`, and
+  `OPERATOR_NAME` and `PRIVACY_EMAIL` fill in `/privacy` and `/terms`. Those pages are drafts, and say so, until you review them and
   set `LEGAL_PAGES_DRAFT=false`. Inbound mail for these addresses needs an MX host: SendGrid only
   sends.
 - **Backups.** `deploy/backup.sh` (nightly with the systemd timer in `deploy/systemd/`) dumps the

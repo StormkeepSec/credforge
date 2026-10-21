@@ -57,6 +57,13 @@
       "when": 1792517026499,
       "tag": "0007_recipient_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792600800134,
+      "tag": "0008_moderation",
+      "breakpoints": true
     }
   ]
 }

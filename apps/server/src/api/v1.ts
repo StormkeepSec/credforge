@@ -71,8 +71,13 @@ export const apiV1: FastifyPluginAsync<{
   apiKeyLimiter: RateLimiter;
   /** Invitation links opened per client IP (shared with claim links). */
   linkLimiter: RateLimiter;
+  /** Image and CSV uploads per org per hour (design plan §6.5). */
+  uploadLimiter: RateLimiter;
   onApiResponse?: ApiResponseObserver;
-}> = async (app, { services, verify, apiKeyLimiter, linkLimiter, onApiResponse }) => {
+}> = async (
+  app,
+  { services, verify, apiKeyLimiter, linkLimiter, uploadLimiter, onApiResponse },
+) => {
   app.setErrorHandler(problemErrorHandler);
   if (onApiResponse) {
     app.addHook('onSend', async (request, reply, payload) => {
@@ -101,11 +106,11 @@ export const apiV1: FastifyPluginAsync<{
       await scoped.register(orgRoutes, { services });
       await scoped.register(memberRoutes, { services });
       await scoped.register(invitationRoutes, { services });
-      await scoped.register(issuerRoutes, { services });
-      await scoped.register(achievementRoutes, { services });
+      await scoped.register(issuerRoutes, { services, uploadLimiter });
+      await scoped.register(achievementRoutes, { services, uploadLimiter });
       await scoped.register(credentialRoutes, { services });
       await scoped.register(erasureRoutes, { services });
-      await scoped.register(batchRoutes, { services });
+      await scoped.register(batchRoutes, { services, uploadLimiter });
       await scoped.register(exportRoutes, { services });
       await scoped.register(auditRoutes, { services });
       await scoped.register(apiKeyRoutes, { services });

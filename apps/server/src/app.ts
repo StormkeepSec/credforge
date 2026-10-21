@@ -11,11 +11,13 @@ import { type ApiResponseObserver, apiV1 } from './api/v1';
 import { authRoutes } from './auth/routes';
 import type { Config } from './config';
 import { sendgridWebhookRoutes } from './email/webhook-routes';
+import { UPLOAD_WINDOW_MS } from './files/limits';
 import { loggerOptions } from './logger';
 import { resolvePublicAssets } from './public/assets';
 import { publicCredentialRoutes } from './public/credential-routes';
 import { publicImageRoutes } from './public/image-routes';
 import { publicIssuerRoutes } from './public/issuer-routes';
+import { publicReportRoutes } from './public/report-routes';
 import { createNotFoundHandler, publicPages } from './public/routes';
 import { publicVerifyRoutes } from './public/verify-routes';
 import { healthRoutes } from './routes/health';
@@ -114,12 +116,17 @@ export async function buildApp({
     // In memory: one app process behind nginx (design plan §3). `/status/` is never limited.
     const apiKeyLimiter = createRateLimiter({ max: config.apiRateLimit, windowMs: 60_000 });
     const linkLimiter = createRateLimiter({ max: config.claimRateLimit, windowMs: 60_000 });
+    const uploadLimiter = createRateLimiter({
+      max: config.orgUploadRateLimit,
+      windowMs: UPLOAD_WINDOW_MS,
+    });
     await app.register(authRoutes, services);
     await app.register(apiV1, {
       services,
       verify,
       apiKeyLimiter,
       linkLimiter,
+      uploadLimiter,
       onApiResponse,
       prefix: '/api/v1',
     });
@@ -127,6 +134,7 @@ export async function buildApp({
     await app.register(publicImageRoutes, { services });
     await app.register(publicCredentialRoutes, { services, assets, claimLimiter: linkLimiter });
     await app.register(publicVerifyRoutes, { services, assets, ...verify });
+    await app.register(publicReportRoutes, { services, assets });
     await app.register(sendgridWebhookRoutes, { services });
   }
   await app.register(webApp, { webDistDir: config.webDistDir });

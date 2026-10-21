@@ -15,6 +15,8 @@ import type {
   BatchPage,
   BatchRowPage,
   BulkRevokeResult,
+  ContentReport,
+  ContentReportPage,
   CreatedApiKey,
   CredentialDetails,
   CredentialPage,
@@ -26,6 +28,9 @@ import type {
   Issuer,
   Member,
   MeResponse,
+  ModerationItem,
+  ModerationItemPage,
+  ModerationSummary,
   OrgDetails,
   PlatformOrg,
   Problem,
@@ -35,13 +40,28 @@ import type {
   RecipientErasureResult,
   VerifyResult,
 } from './api';
-import { ORG_STATUSES, SIGNUP_MODES } from './api';
+import {
+  MODERATION_STATUSES,
+  ORG_STATUSES,
+  REPORT_CATEGORIES,
+  REPORT_STATUSES,
+  SIGNUP_MODES,
+} from './api';
 import { API_KEY_SCOPES, ORG_ROLES, PERMISSIONS } from './roles';
 
 const dateTime = z.string().describe('ISO 8601 date-time');
 const nullable = <T extends z.ZodType>(schema: T) => schema.nullable();
 const role = z.enum(ORG_ROLES);
 const orgStatus = z.enum(ORG_STATUSES);
+const moderationStatus = z.enum(MODERATION_STATUSES);
+
+/** Where an issuer's or achievement's public content stands with review. */
+const contentReviewSchema = z
+  .object({
+    text: moderationStatus.describe('Public pages show the last cleared text while this waits'),
+    image: nullable(moderationStatus),
+  })
+  .meta({ id: 'ContentReview' });
 
 export const problemSchema = z
   .object({
@@ -163,6 +183,7 @@ export const issuerSchema = z
     email: nullable(z.string()),
     description: nullable(z.string()),
     logo: nullable(imageSetSchema),
+    review: contentReviewSchema,
     keys: z.array(
       z.object({
         id: z.uuid(),
@@ -199,7 +220,12 @@ export const domainCheckResultSchema = z
 export const platformOrgSchema = orgSummarySchema
   .extend({
     approvedAt: nullable(dateTime),
-    requestedBy: nullable(z.object({ name: z.string(), email: z.string() })),
+    requestedBy: nullable(
+      z.object({ id: z.uuid(), name: z.string(), email: z.string(), disabled: z.boolean() }),
+    ),
+    trustedAt: nullable(dateTime).describe('Trusted orgs’ content skips review'),
+    review: z.object({ pending: z.number().int(), openReports: z.number().int() }),
+    activeCredentials: z.number().int(),
     memberCount: z.number().int(),
     issuers: z.array(
       z.object({
@@ -211,8 +237,101 @@ export const platformOrgSchema = orgSummarySchema
     ),
     dailySendLimit: nullable(z.number().int()),
     defaultDailySendLimit: z.number().int(),
+    uploadRateLimit: nullable(z.number().int()),
+    defaultUploadRateLimit: z.number().int(),
+    storageQuotaMb: nullable(z.number().int()),
+    defaultStorageQuotaMb: z.number().int(),
+    storageUsedBytes: z.number().int(),
   })
   .meta({ id: 'PlatformOrg' });
+
+const moderationUserSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  email: z.string(),
+  disabled: z.boolean(),
+});
+const moderationOrgSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  status: orgStatus,
+  trusted: z.boolean(),
+});
+const decidedBySchema = nullable(z.object({ name: z.string(), email: z.string() }));
+
+export const moderationItemSchema = z
+  .object({
+    id: z.uuid(),
+    kind: z.enum(['image', 'text']),
+    status: moderationStatus,
+    flags: z.array(
+      z.object({
+        source: z.enum(['review', 'blocklist', 'report']),
+        at: dateTime,
+        terms: nullable(z.array(z.string())),
+        reportId: nullable(z.uuid()),
+        category: nullable(z.enum(REPORT_CATEGORIES)),
+      }),
+    ),
+    org: moderationOrgSchema,
+    subject: z.object({
+      type: z.enum(['organization', 'issuer', 'achievement']),
+      id: z.uuid(),
+      name: z.string(),
+      pageUrl: nullable(z.string()),
+      removed: z.boolean(),
+    }),
+    text: nullable(z.array(z.object({ field: z.string(), label: z.string(), value: z.string() }))),
+    image: nullable(
+      z.object({
+        mimeType: z.string(),
+        width: nullable(z.number().int()),
+        height: nullable(z.number().int()),
+      }),
+    ),
+    heldCredentials: z.number().int(),
+    submittedBy: nullable(moderationUserSchema),
+    submittedAt: dateTime,
+    decidedAt: nullable(dateTime),
+    decidedBy: decidedBySchema,
+    decisionNote: nullable(z.string()),
+  })
+  .meta({ id: 'ModerationItem' });
+
+export const moderationItemPageSchema = z
+  .object({ items: z.array(moderationItemSchema), next: nullable(z.string()) })
+  .meta({ id: 'ModerationItemPage' });
+
+export const contentReportSchema = z
+  .object({
+    id: z.uuid(),
+    status: z.enum(REPORT_STATUSES),
+    category: z.enum(REPORT_CATEGORIES),
+    details: nullable(z.string()),
+    reporterEmail: nullable(z.string()),
+    createdAt: dateTime,
+    target: z.object({
+      type: z.enum(['credential', 'achievement', 'issuer']),
+      id: z.uuid(),
+      pageUrl: z.string(),
+      name: z.string(),
+    }),
+    org: moderationOrgSchema,
+    items: z.array(moderationItemSchema),
+    heldItemIds: z.array(z.uuid()),
+    resolvedAt: nullable(dateTime),
+    resolvedBy: decidedBySchema,
+    resolutionNote: nullable(z.string()),
+  })
+  .meta({ id: 'ContentReport' });
+
+export const contentReportPageSchema = z
+  .object({ reports: z.array(contentReportSchema), next: nullable(z.string()) })
+  .meta({ id: 'ContentReportPage' });
+
+export const moderationSummarySchema = z
+  .object({ pendingItems: z.number().int(), openReports: z.number().int() })
+  .meta({ id: 'ModerationSummary' });
 
 const alignmentSchema = z.object({
   targetName: z.string(),
@@ -237,6 +356,10 @@ export const achievementSchema = z
     alignments: z.array(alignmentSchema),
     validForDays: nullable(z.number().int()),
     image: nullable(imageSetSchema),
+    review: contentReviewSchema,
+    removed: nullable(z.object({ at: dateTime, reason: nullable(z.string()) })).describe(
+      'Unpublished by a platform admin: archived until one puts it back',
+    ),
     revision: z.number().int(),
     status: z.enum(['draft', 'active', 'archived']),
     awardedCount: z.number().int(),
@@ -656,6 +779,11 @@ const checks: {
   domainVerification: Same<Out<typeof domainVerificationSchema>, DomainVerification>;
   domainCheck: Same<Out<typeof domainCheckResultSchema>, DomainCheckResult>;
   platformOrg: Same<Out<typeof platformOrgSchema>, PlatformOrg>;
+  moderationItem: Same<Out<typeof moderationItemSchema>, ModerationItem>;
+  moderationItemPage: Same<Out<typeof moderationItemPageSchema>, ModerationItemPage>;
+  contentReport: Same<Out<typeof contentReportSchema>, ContentReport>;
+  contentReportPage: Same<Out<typeof contentReportPageSchema>, ContentReportPage>;
+  moderationSummary: Same<Out<typeof moderationSummarySchema>, ModerationSummary>;
   achievement: Same<Out<typeof achievementSchema>, Achievement>;
   achievementRevision: Same<Out<typeof achievementRevisionSchema>, AchievementRevision>;
   credential: Same<Out<typeof credentialDetailsSchema>, CredentialDetails>;
@@ -686,6 +814,11 @@ const checks: {
   domainVerification: true,
   domainCheck: true,
   platformOrg: true,
+  moderationItem: true,
+  moderationItemPage: true,
+  contentReport: true,
+  contentReportPage: true,
+  moderationSummary: true,
   achievement: true,
   achievementRevision: true,
   credential: true,

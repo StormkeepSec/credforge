@@ -26,6 +26,11 @@ export interface OrgAccess {
     approvedAt: Date | null;
     /** The org's own daily send limit; null uses the instance default. */
     dailySendLimit: number | null;
+    /** Its own upload limits; null uses the instance defaults. */
+    uploadRateLimit: number | null;
+    storageQuotaMb: number | null;
+    /** When a platform admin marked it trusted (its content skips review, design plan §6.5). */
+    trustedAt: Date | null;
     createdAt: Date;
   };
   /** The member making the request; null for an API key. */
@@ -57,6 +62,9 @@ const ORG_COLUMNS = {
   statusReason: organization.statusReason,
   approvedAt: organization.approvedAt,
   dailySendLimit: organization.dailySendLimit,
+  uploadRateLimit: organization.uploadRateLimit,
+  storageQuotaMb: organization.storageQuotaMb,
+  trustedAt: organization.trustedAt,
   createdAt: organization.createdAt,
 };
 
@@ -190,6 +198,9 @@ function orgOf(row: {
   statusReason: string | null;
   approvedAt: Date | null;
   dailySendLimit: number | null;
+  uploadRateLimit: number | null;
+  storageQuotaMb: number | null;
+  trustedAt: Date | null;
   createdAt: Date;
 }): OrgAccess['org'] {
   return {
@@ -199,6 +210,9 @@ function orgOf(row: {
     statusReason: row.statusReason,
     approvedAt: row.approvedAt,
     dailySendLimit: row.dailySendLimit,
+    uploadRateLimit: row.uploadRateLimit,
+    storageQuotaMb: row.storageQuotaMb,
+    trustedAt: row.trustedAt,
     createdAt: row.createdAt,
   };
 }

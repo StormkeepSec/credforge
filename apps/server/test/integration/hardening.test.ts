@@ -195,20 +195,21 @@ describe('sign-in rate limits', () => {
 });
 
 describe('abuse reports and public pages', () => {
-  it('links "Report a problem" to the abuse address on badge, achievement and issuer pages', async () => {
-    for (const url of [
-      `/credentials/${credentialId}`,
-      `/achievements/${org.achievementId}`,
-      `/issuers/${org.issuerId}`,
-    ]) {
+  it('puts the "Report a problem" form on badge, achievement and issuer pages, with the abuse address', async () => {
+    for (const [url, action] of [
+      [`/credentials/${credentialId}`, `/report/credential/${credentialId}`],
+      [`/achievements/${org.achievementId}`, `/report/achievement/${org.achievementId}`],
+      [`/issuers/${org.issuerId}`, `/report/issuer/${org.issuerId}`],
+    ] as const) {
       const body = (await html(url)).body;
       expect(body, url).toContain('Report a problem');
-      expect(body, url).toContain('mailto:abuse@credforge.test?subject=');
-      expect(body, url).toContain(encodeURIComponent(`${BASE_URL}${url}`));
+      expect(body, url).toContain(`action="${action}"`);
+      expect(body, url).toContain('value="child_safety"');
+      expect(body, url).toContain('href="mailto:abuse@credforge.test"');
     }
   });
 
-  it('shows no report link when no abuse address is set', async () => {
+  it('keeps the report form without an abuse address, and no security.txt without its address', async () => {
     const plain = await createTestEnvironment({ SIGNUP_MODE: 'open' });
     try {
       const plainOrg = await issuingOrg(plain);
@@ -217,7 +218,8 @@ describe('abuse reports and public pages', () => {
         url: `/issuers/${plainOrg.issuerId}`,
         headers: { accept: 'text/html' },
       });
-      expect(page.body).not.toContain('Report a problem');
+      expect(page.body).toContain('Report a problem');
+      expect(page.body).not.toContain('mailto:abuse@');
       const security = await plain.app.inject({
         method: 'GET',
         url: '/.well-known/security.txt',

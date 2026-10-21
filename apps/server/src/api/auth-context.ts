@@ -65,7 +65,10 @@ async function load(
   const u = response.user as typeof response.user & {
     isPlatformAdmin?: boolean | null;
     twoFactorEnabled?: boolean | null;
+    disabledAt?: Date | string | null;
   };
+  // Disabling ends an account's sessions; one that is somehow left counts for nothing (§6.5).
+  if (u.disabledAt) return null;
   const s = response.session as typeof response.session & { mfaVerifiedAt?: Date | string | null };
   const user: SessionUser = {
     id: u.id,

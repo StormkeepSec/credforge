@@ -66,6 +66,10 @@ export type ProblemCode =
   | 'api_key_not_allowed'
   | 'no_website'
   | 'email_confirmation_invalid'
+  | 'content_in_review'
+  | 'content_removed'
+  | 'removed_by_platform'
+  | 'storage_quota_exceeded'
   | 'internal_error';
 
 export interface Problem {
@@ -149,21 +153,118 @@ export type IssuerInputBody = z.input<typeof issuerInput>;
 export const updateIssuerInput = issuerInput.partial();
 export type UpdateIssuerInput = z.input<typeof updateIssuerInput>;
 
-export const platformDecisionInput = z.object({ reason: optionalText(1000).optional() });
+export const platformDecisionInput = z.object({
+  reason: optionalText(1000).optional(),
+  /**
+   * Approving: the items waiting for review that the admin looked at, cleared with the approval
+   * (design plan §6.5). Items saved after the admin loaded the queue keep waiting.
+   */
+  clearItemIds: z.array(z.uuid()).max(500).optional(),
+});
 export type PlatformDecisionInput = z.input<typeof platformDecisionInput>;
 
 export const platformOrgsQuery = z.object({ status: z.enum(ORG_STATUSES).optional() });
 
-/** `null` goes back to the instance default; 0 means no limit. */
-export const platformOrgLimitsInput = z.object({
-  dailySendLimit: z
+const orgLimit = (max: number, maxLabel: string) =>
+  z
     .number({ error: 'Enter a whole number' })
     .int('Enter a whole number')
     .min(0, 'Can’t be negative')
-    .max(1_000_000, 'At most 1,000,000')
-    .nullable(),
+    .max(max, `At most ${maxLabel}`)
+    .nullable()
+    .optional();
+
+/** Each limit: `null` goes back to the instance default, 0 means no limit, left out stays. */
+export const platformOrgLimitsInput = z.object({
+  dailySendLimit: orgLimit(1_000_000, '1,000,000'),
+  /** Image and CSV uploads per hour (design plan §6.5). */
+  uploadRateLimit: orgLimit(100_000, '100,000'),
+  /** Stored files, in MB. */
+  storageQuotaMb: orgLimit(1_000_000, '1,000,000'),
 });
 export type PlatformOrgLimitsInput = z.input<typeof platformOrgLimitsInput>;
+
+// ---- moderation (design plan §6.5) ----
+
+/**
+ * Where a piece of public content stands: `pending` waits for a platform admin and isn't served
+ * publicly, `cleared` is published, `removed` was taken down by a platform admin.
+ */
+export const MODERATION_STATUSES = ['pending', 'cleared', 'removed'] as const;
+export type ModerationStatus = (typeof MODERATION_STATUSES)[number];
+
+/** What a report from a public page is about. */
+export const REPORT_CATEGORIES = [
+  'child_safety',
+  'sexual_content',
+  'hate_harassment',
+  'violence',
+  'impersonation',
+  'scam_phishing',
+  'personal_data',
+  'other',
+] as const;
+export type ReportCategory = (typeof REPORT_CATEGORIES)[number];
+
+export const REPORT_CATEGORY_LABELS: Record<ReportCategory, string> = {
+  child_safety: 'Child sexual abuse or exploitation of a child',
+  sexual_content: 'Sexual or pornographic content',
+  hate_harassment: 'Hate, harassment or threats',
+  violence: 'Violent or graphic content',
+  impersonation: 'Impersonation or a fake badge',
+  scam_phishing: 'Scam, phishing or spam',
+  personal_data: 'My personal information, shown without my consent',
+  other: 'Something else',
+};
+
+export const REPORT_STATUSES = ['open', 'resolved', 'dismissed'] as const;
+export type ReportStatus = (typeof REPORT_STATUSES)[number];
+
+export const moderationItemsQuery = z.object({
+  status: z.enum(MODERATION_STATUSES).default('pending'),
+  orgId: z.uuid().optional(),
+  /** Cursor: the `next` value from the previous page. */
+  before: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+export const reportsQuery = z.object({
+  status: z.enum(REPORT_STATUSES).default('open'),
+  before: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+/** Clearing: an optional note for the record. */
+export const moderationClearInput = z.object({ note: optionalText(1000).optional() });
+export type ModerationClearInput = z.input<typeof moderationClearInput>;
+
+/** Every action against an org's content: the reason is emailed to its owners. */
+export const moderationReasonInput = z.object({ reason: text(1000) });
+export type ModerationReasonInput = z.input<typeof moderationReasonInput>;
+
+export const revokeOrgCredentialsInput = z.object({
+  /** For the record and the owners' email. */
+  reason: text(1000),
+  /** Shown on each badge's page. */
+  publicReason: optionalText(500).optional(),
+});
+export type RevokeOrgCredentialsInput = z.input<typeof revokeOrgCredentialsInput>;
+
+export const trustOrgInput = z.object({ trusted: z.boolean() });
+export type TrustOrgInput = z.input<typeof trustOrgInput>;
+
+export const disableUserInput = z.object({
+  reason: text(1000),
+  /** The org whose content led to it: the event goes in its audit log and its owners are told. */
+  orgId: z.uuid().optional(),
+});
+export type DisableUserInput = z.input<typeof disableUserInput>;
+
+export const resolveReportInput = z.object({
+  status: z.enum(['resolved', 'dismissed'], { error: 'Choose resolved or dismissed' }),
+  note: optionalText(1000).optional(),
+});
+export type ResolveReportInput = z.input<typeof resolveReportInput>;
 
 // ---- achievements ----
 
@@ -744,6 +845,14 @@ export interface DomainStatus {
   method: 'dns' | 'file' | null;
 }
 
+/** Where an issuer's or achievement's public content stands with review (design plan §6.5). */
+export interface ContentReview {
+  /** Its current public text. Public pages show the last cleared text while this waits. */
+  text: ModerationStatus;
+  /** Its current image (badge image or logo); null when there is none. */
+  image: ModerationStatus | null;
+}
+
 export interface Issuer {
   id: string;
   /** The permanent issuer id embedded in credentials: `{PUBLIC_BASE_URL}/issuers/{id}`. */
@@ -755,6 +864,7 @@ export interface Issuer {
   email: string | null;
   description: string | null;
   logo: ImageSet | null;
+  review: ContentReview;
   keys: SigningKeySummary[];
   createdAt: string;
   updatedAt: string;
@@ -800,13 +910,113 @@ export interface CreatedApiKey extends ApiKey {
 
 export interface PlatformOrg extends OrgSummary {
   approvedAt: string | null;
-  requestedBy: { name: string; email: string } | null;
+  requestedBy: { id: string; name: string; email: string; disabled: boolean } | null;
+  /** When a platform admin marked it trusted: its content skips review (design plan §6.5). */
+  trustedAt: string | null;
+  /** Its content waiting for review, and open reports about its pages. */
+  review: { pending: number; openReports: number };
+  /** Badges it awarded that aren't revoked. */
+  activeCredentials: number;
   memberCount: number;
   issuers: { id: string; name: string; website: string | null; domainVerified: boolean }[];
   /** This org's own limit; null uses the instance default. */
   dailySendLimit: number | null;
   /** The instance default (DEFAULT_ORG_DAILY_SEND_LIMIT); 0 means no limit. */
   defaultDailySendLimit: number;
+  /** Uploads per hour and stored MB: its own (null: the default) and the defaults (0: none). */
+  uploadRateLimit: number | null;
+  defaultUploadRateLimit: number;
+  storageQuotaMb: number | null;
+  defaultStorageQuotaMb: number;
+  storageUsedBytes: number;
+}
+
+/** Why a moderation item is (or was) held. */
+export interface ModerationFlag {
+  source: 'review' | 'blocklist' | 'report';
+  at: string;
+  /** Word-list terms found (`blocklist`), as the operator listed them. */
+  terms: string[] | null;
+  /** The report (`report`). */
+  reportId: string | null;
+  category: ReportCategory | null;
+}
+
+export interface ModerationUser {
+  id: string;
+  name: string;
+  email: string;
+  /** Disabled by a platform admin. */
+  disabled: boolean;
+}
+
+/** One version of an org's public content in the moderation queue (design plan §6.5). */
+export interface ModerationItem {
+  id: string;
+  kind: 'image' | 'text';
+  status: ModerationStatus;
+  flags: ModerationFlag[];
+  org: { id: string; name: string; status: OrgStatus; trusted: boolean };
+  subject: {
+    type: 'organization' | 'issuer' | 'achievement';
+    id: string;
+    name: string;
+    /** Its public page; null for an org or a draft. */
+    pageUrl: string | null;
+    /** An achievement a platform admin unpublished. */
+    removed: boolean;
+  };
+  /** Text items: each field as submitted. */
+  text: { field: string; label: string; value: string }[] | null;
+  /** Image items: fetch the image itself, blurred or not, from `…/items/{id}/image`. */
+  image: { mimeType: string; width: number | null; height: number | null } | null;
+  /** Badges awarded to the org's members that carry it and wait for it. */
+  heldCredentials: number;
+  submittedBy: ModerationUser | null;
+  submittedAt: string;
+  decidedAt: string | null;
+  decidedBy: { name: string; email: string } | null;
+  decisionNote: string | null;
+}
+
+export interface ModerationItemPage {
+  items: ModerationItem[];
+  next: string | null;
+}
+
+/** A report from a public page's "Report a problem" form. */
+export interface ContentReport {
+  id: string;
+  status: ReportStatus;
+  category: ReportCategory;
+  details: string | null;
+  /** Given by the reporter for a reply, if they chose to. */
+  reporterEmail: string | null;
+  createdAt: string;
+  target: {
+    type: 'credential' | 'achievement' | 'issuer';
+    id: string;
+    pageUrl: string;
+    name: string;
+  };
+  org: { id: string; name: string; status: OrgStatus; trusted: boolean };
+  /** The content the reported page shows (or showed), to review with it. */
+  items: ModerationItem[];
+  /** Images a child-safety report held at once. */
+  heldItemIds: string[];
+  resolvedAt: string | null;
+  resolvedBy: { name: string; email: string } | null;
+  resolutionNote: string | null;
+}
+
+export interface ContentReportPage {
+  reports: ContentReport[];
+  next: string | null;
+}
+
+export interface ModerationSummary {
+  pendingItems: number;
+  openReports: number;
 }
 
 export interface Alignment {
@@ -832,6 +1042,9 @@ export interface Achievement {
   alignments: Alignment[];
   validForDays: number | null;
   image: ImageSet | null;
+  review: ContentReview;
+  /** Unpublished by a platform admin (design plan §6.5): archived until one puts it back. */
+  removed: { at: string; reason: string | null } | null;
   /** Increases with every saved change; credentials record the revision they were issued with. */
   revision: number;
   status: AchievementStatus;

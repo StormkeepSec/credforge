@@ -1,13 +1,15 @@
 import type { OrgStatus } from '@credforge/contracts';
 import { OrgStatusNotice } from '../components/org-notice';
-import { ReportProblem, SitePage } from '../components/site-chrome';
+import { type ReportFormProps, ReportProblem } from '../components/report-form';
+import { ReviewNotice } from '../components/review-notice';
+import { SitePage } from '../components/site-chrome';
 import { Document } from '../document';
 
 export interface AchievementPageProps {
   url: string;
   stylesheet: string;
-  /** Where "Report a problem" goes; unset hides it. */
-  reportEmail?: string;
+  /** The "Report a problem" form at the foot of the page. */
+  report: ReportFormProps;
   /** The awarding organization's status (new, suspended or declined get a notice). */
   orgStatus: OrgStatus;
   achievement: {
@@ -24,6 +26,11 @@ export interface AchievementPageProps {
       targetCode?: string;
     }[];
     archived: boolean;
+    /**
+     * Waiting for review (design plan §6.5): `new` when nothing was cleared yet (the details are
+     * left out), `update` when the page shows the version cleared last.
+     */
+    review: 'new' | 'update' | null;
   };
   image: { url: string; alt: string } | null;
   ogImage: { url: string; width: number; height: number } | null;
@@ -43,7 +50,7 @@ export function AchievementPage({
   image,
   ogImage,
   issuer,
-  reportEmail,
+  report,
   orgStatus,
 }: AchievementPageProps) {
   return (
@@ -58,6 +65,7 @@ export function AchievementPage({
       <SitePage>
         <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
           <OrgStatusNotice status={orgStatus} subject="badge" className="mb-8" />
+          {a.review && <ReviewNotice subject="achievement" state={a.review} className="mb-8" />}
           {a.archived && (
             <div role="note" className="mb-8 rounded-lg border border-warning/40 bg-warning/5 p-4">
               <p className="font-semibold">No longer awarded</p>
@@ -183,7 +191,7 @@ export function AchievementPage({
             <p className="mt-1 font-mono break-all">{url}</p>
             <div className="mt-8 grid gap-2">
               <p className="text-ink-muted">Hosted on credforge.</p>
-              <ReportProblem email={reportEmail} pageUrl={url} />
+              <ReportProblem {...report} />
             </div>
           </section>
         </div>

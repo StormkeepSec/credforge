@@ -12,6 +12,7 @@ import {
 } from '@credforge/db';
 import { type AchievementInput, CREDENTIAL_CONTEXT } from '@credforge/ob3';
 import { type FileRow, imageSet } from '../files/service';
+import { contentReview, type ReviewLookup } from '../moderation/service';
 
 export type AchievementRow = typeof achievement.$inferSelect;
 
@@ -111,6 +112,7 @@ export function serializeAchievement(
   row: AchievementRow,
   files: Map<string, FileRow>,
   awardedCount: number,
+  reviews: ReviewLookup,
 ): AchievementResponse {
   const image = row.imageFileId ? files.get(row.imageFileId) : undefined;
   return {
@@ -133,6 +135,8 @@ export function serializeAchievement(
     })),
     validForDays: row.validForDays,
     image: image ? imageSet(publicBaseUrl, image) : null,
+    review: contentReview(reviews, row),
+    removed: row.removedAt ? { at: row.removedAt.toISOString(), reason: row.removedReason } : null,
     revision: row.revision,
     status: row.status,
     awardedCount,

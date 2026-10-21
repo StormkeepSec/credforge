@@ -2,14 +2,23 @@ import type { OrgStatus } from '@credforge/contracts';
 import type { CredentialVerification } from '@credforge/ob3';
 import type { ReactNode } from 'react';
 import { OrgStatusNotice } from '../components/org-notice';
-import { ReportProblem, SitePage, websiteLabel } from '../components/site-chrome';
+import { type ReportFormProps, ReportProblem } from '../components/report-form';
+import { SitePage, websiteLabel } from '../components/site-chrome';
 import { Document } from '../document';
 import { formatLongDate } from '../format';
 
 export type CredentialState = 'valid' | 'expired' | 'revoked' | 'not_yet_valid';
 
+/** What the people who run the site held or removed of a badge (design plan §6.5). */
+export interface CredentialReview {
+  image: 'pending' | 'cleared' | 'removed';
+  /** Its achievement was unpublished by a platform admin: its details aren't shown. */
+  achievementRemoved: boolean;
+}
+
 /** Everything the page shows, read from the signed credential (what was actually issued). */
 export interface CredentialView {
+  review: CredentialReview;
   achievement: {
     url: string;
     name: string;
@@ -36,7 +45,8 @@ export interface CredentialView {
   /** `superseded`: replaced by a corrected copy. The public reason, if the issuer gave one. */
   revocation: { kind: 'revoked' | 'superseded'; publicReason: string | null } | null;
   evidence: { url?: string; name?: string; narrative?: string }[];
-  downloads: { png: string; svg: string | null; json: string; certificate: string };
+  /** The baked image is null while the badge image waits for review. */
+  downloads: { png: string | null; svg: string | null; json: string; certificate: string };
 }
 
 export interface OwnerView {
@@ -64,8 +74,8 @@ export interface CredentialPageProps {
   notice: 'link_expired' | null;
   /** The issuer's website host, when the issuer proved it controls it (§6.3). */
   issuerVerifiedHost: string | null;
-  /** Where "Report a problem" goes; unset hides it. */
-  reportEmail?: string;
+  /** The "Report a problem" form at the foot of the page. */
+  report: ReportFormProps;
   /** The awarding organization's status: pages say when it is new, suspended or declined. */
   orgStatus: OrgStatus;
 }
@@ -196,7 +206,7 @@ export function CredentialPage({
   owner,
   notice,
   issuerVerifiedHost,
-  reportEmail,
+  report,
   orgStatus,
 }: CredentialPageProps) {
   const website = c.issuer.website ? websiteLabel(c.issuer.website, issuerVerifiedHost) : null;
@@ -221,6 +231,15 @@ export function CredentialPage({
       <SitePage>
         <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
           <OrgStatusNotice status={orgStatus} subject="badge" className="mb-8" />
+          {c.review.achievementRemoved && (
+            <div role="note" className="mb-8 rounded-lg border border-warning/40 bg-warning/5 p-4">
+              <p className="font-semibold">Achievement removed</p>
+              <p className="mt-1 text-sm text-ink-muted">
+                The people who run this site removed the achievement this badge was awarded for, so
+                its details aren’t shown. The badge itself can still be checked.
+              </p>
+            </div>
+          )}
           {notice === 'link_expired' && (
             <div role="note" className="mb-8 rounded-lg border border-warning/40 bg-warning/5 p-4">
               <p className="font-semibold">This link no longer works</p>
@@ -356,11 +375,13 @@ export function CredentialPage({
                 </div>
               )}
               <ul aria-label="Downloads" className="mt-8 flex flex-wrap gap-3">
-                <li>
-                  <a href={c.downloads.png} download className={button}>
-                    Download badge (PNG)
-                  </a>
-                </li>
+                {c.downloads.png && (
+                  <li>
+                    <a href={c.downloads.png} download className={button}>
+                      Download badge (PNG)
+                    </a>
+                  </li>
+                )}
                 {c.downloads.svg && (
                   <li>
                     <a href={c.downloads.svg} download className={button}>
@@ -380,37 +401,40 @@ export function CredentialPage({
                 </li>
               </ul>
               <p className="mt-3 text-sm text-ink-muted">
-                The badge image carries the signed credential, so any Open Badges 3.0 tool can check
-                it.
+                {c.review.image === 'pending'
+                  ? 'The badge image is waiting for review by the people who run this site. It can be downloaded once it is cleared; the JSON can be checked now.'
+                  : 'The badge image carries the signed credential, so any Open Badges 3.0 tool can check it.'}
               </p>
             </div>
           </div>
 
           <div className="mt-12">
-            <Section id="about-heading" title="About this achievement">
-              <p className="leading-relaxed whitespace-pre-line">{c.achievement.description}</p>
-              {(c.achievement.criteriaNarrative || c.achievement.criteriaUrl) && (
-                <>
-                  <h3 className="mt-6 font-bold">How it is earned</h3>
-                  {c.achievement.criteriaNarrative && (
-                    <p className="mt-2 leading-relaxed whitespace-pre-line text-ink-muted">
-                      {c.achievement.criteriaNarrative}
-                    </p>
-                  )}
-                  {c.achievement.criteriaUrl && (
-                    <p className="mt-2">
-                      <a
-                        href={c.achievement.criteriaUrl}
-                        rel="nofollow noopener noreferrer"
-                        className={link}
-                      >
-                        Criteria on {hostOf(c.achievement.criteriaUrl)}
-                      </a>
-                    </p>
-                  )}
-                </>
-              )}
-            </Section>
+            {!c.review.achievementRemoved && (
+              <Section id="about-heading" title="About this achievement">
+                <p className="leading-relaxed whitespace-pre-line">{c.achievement.description}</p>
+                {(c.achievement.criteriaNarrative || c.achievement.criteriaUrl) && (
+                  <>
+                    <h3 className="mt-6 font-bold">How it is earned</h3>
+                    {c.achievement.criteriaNarrative && (
+                      <p className="mt-2 leading-relaxed whitespace-pre-line text-ink-muted">
+                        {c.achievement.criteriaNarrative}
+                      </p>
+                    )}
+                    {c.achievement.criteriaUrl && (
+                      <p className="mt-2">
+                        <a
+                          href={c.achievement.criteriaUrl}
+                          rel="nofollow noopener noreferrer"
+                          className={link}
+                        >
+                          Criteria on {hostOf(c.achievement.criteriaUrl)}
+                        </a>
+                      </p>
+                    )}
+                  </>
+                )}
+              </Section>
+            )}
 
             {c.achievement.tags.length > 0 && (
               <Section id="skills-heading" title="Skills">
@@ -532,7 +556,7 @@ export function CredentialPage({
               </dl>
               <div className="mt-8 grid gap-2">
                 <p className="text-sm text-ink-muted">Hosted on credforge.</p>
-                <ReportProblem email={reportEmail} pageUrl={url} />
+                <ReportProblem {...report} />
               </div>
             </Section>
           </div>

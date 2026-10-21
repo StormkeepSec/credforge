@@ -12,6 +12,7 @@ import { PageHeader } from '../components/app-shell';
 import { ConfirmButton } from '../components/confirm';
 import { ImagePicker, type PickedImage } from '../components/image-picker';
 import { isWritable, OrgStatusBanner } from '../components/org-status';
+import { IssuerReview } from '../components/review';
 import { Button } from '../components/ui/button';
 import {
   Card,
@@ -447,6 +448,7 @@ export function OrgIssuerPage({ orgId }: { orgId: string }) {
       />
       <OrgStatusBanner org={org} />
       <div className="grid gap-6">
+        {issuer && <IssuerReview issuer={issuer} />}
         {!issuer && !canWrite ? (
           <Alert variant="info">This organization hasn’t set up its issuer profile yet.</Alert>
         ) : (

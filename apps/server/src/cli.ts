@@ -7,7 +7,7 @@ import { createAuth } from './auth/auth';
 import { describeTwoFactorReset, resetTwoFactor } from './auth/two-factor-reset';
 import { loadConfigOrExit } from './config';
 import { eraseRecipient, previewErasure, reapplyErasures } from './credentials/erasure';
-import { revokeCredentials } from './credentials/revocation';
+import { revokeAllOrgCredentials } from './credentials/revocation';
 import { createKeyEncryption } from './crypto/key-encryption';
 import { loadDevEnvFile } from './dev-env';
 import { createMemoryOutbox } from './email/outbox';
@@ -286,22 +286,13 @@ async function revokeOrgCredentials(args: string[]) {
       keys: createKeyEncryption(config.masterKey),
       outbox: createMemoryOutbox(),
     };
-    let revoked = 0;
-    for (;;) {
-      const ids = (
-        await db.select({ id: credential.id }).from(credential).where(issued).limit(500)
-      ).map((row) => row.id);
-      if (ids.length === 0) break;
-      const result = await revokeCredentials(
-        services,
-        org.id,
-        ids,
-        { reason, publicReason: values['public-reason']?.trim() || null },
-        CLI_ACTOR,
-        {},
-      );
-      revoked += result.revoked.length;
-    }
+    const revoked = await revokeAllOrgCredentials(
+      services,
+      org.id,
+      { reason, publicReason: values['public-reason']?.trim() || null },
+      CLI_ACTOR,
+      {},
+    );
     let published = 0;
     for (const id of await listsWaitingToPublish(db)) {
       if (await publishStatusList(services, id)) published++;

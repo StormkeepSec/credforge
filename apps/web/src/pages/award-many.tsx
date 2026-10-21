@@ -316,12 +316,19 @@ function BatchDraft({
   const batchKey = queries.batch(orgId, batch.id).queryKey;
   // Only the answer to the latest change is shown: an earlier one would undo a later click.
   const latest = useRef(0);
+  // The change the server's data shown reflects. A click made after it (even before React has
+  // applied that data) must not be undone by it.
+  const applied = useRef(0);
   const update = useMutation({
     mutationFn: ({ body }: { body: UpdateBatchInput; seq: number }) =>
       patch<BatchDetails>(`/orgs/${orgId}/batches/${batch.id}`, body),
-    onError: () => queryClient.invalidateQueries({ queryKey: batchKey }),
+    onError: () => {
+      applied.current = latest.current;
+      return queryClient.invalidateQueries({ queryKey: batchKey });
+    },
     onSuccess: async (updated, { seq }) => {
       if (seq !== latest.current) return;
+      applied.current = seq;
       queryClient.setQueryData(batchKey, updated);
       await queryClient.invalidateQueries({ queryKey: ['org', orgId, 'batch', batch.id, 'rows'] });
     },
@@ -340,8 +347,11 @@ function BatchDraft({
   };
   const [choices, setChoices] = useState(fromServer);
   const serverChoices = JSON.stringify(fromServer);
-  // Compared by value: a new answer from the server replaces the choices only if they changed.
-  useEffect(() => setChoices(JSON.parse(serverChoices)), [serverChoices]);
+  // Compared by value: a new answer from the server replaces the choices only if they changed,
+  // and only if no change was made since the one it answers.
+  useEffect(() => {
+    if (applied.current === latest.current) setChoices(JSON.parse(serverChoices));
+  }, [serverChoices]);
 
   function change(body: UpdateBatchInput) {
     setChoices((current) => ({

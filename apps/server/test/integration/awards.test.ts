@@ -157,7 +157,8 @@ describe('achievements', () => {
     const original = await anonymous(image.url);
     expect(original.statusCode).toBe(200);
     expect(original.headers['content-type']).toBe('image/png');
-    expect(original.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+    // Short-lived, so a removed image leaves caches quickly (design plan §6.5, decision 57).
+    expect(original.headers['cache-control']).toBe('public, max-age=600');
     expect(original.headers['x-content-type-options']).toBe('nosniff');
     expect(original.headers['content-security-policy']).toContain('sandbox');
     expect(original.rawPayload.includes(Buffer.from('secret location'))).toBe(false);

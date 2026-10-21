@@ -50,7 +50,8 @@ export function serializeRecipientCredential(
           }
         : null,
     visibility: row.visibility,
-    downloads: view.downloads,
+    // A held badge image answers the download with a note to wait (design plan §6.5).
+    downloads: { ...view.downloads, png: view.downloads.png ?? `${url}/badge.png` },
     linkedInUrl: linkedInUrl(view, url, row.id),
     createdAt: row.createdAt.toISOString(),
   };

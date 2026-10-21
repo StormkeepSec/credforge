@@ -14,6 +14,8 @@ import { and, asc, desc, eq, gt, issuanceBatch, issuanceBatchRow, lt, or } from 
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { ApiError, parse, uuidParam } from '../api/errors';
+import type { RateLimiter } from '../api/rate-limit';
+import { checkUpload } from '../files/limits';
 import { requestInfo, requirePermission, requireWritable } from '../orgs/access';
 import type { Services } from '../services';
 import { TEMPLATE_CSV } from './csv';
@@ -62,10 +64,11 @@ function resultsName(fileName: string | null): string {
  * as the body, `Content-Type: text/csv`) or send JSON rows; check and adjust the column mapping
  * while it is a draft; confirm it; follow its progress; download the results.
  */
-export const batchRoutes: FastifyPluginAsync<{ services: Services }> = async (
-  app,
-  { services },
-) => {
+export const batchRoutes: FastifyPluginAsync<{
+  services: Services;
+  /** Uploads per org (shared by every upload route). */
+  uploadLimiter: RateLimiter;
+}> = async (app, { services, uploadLimiter }) => {
   const { db, config } = services;
 
   app.addContentTypeParser(
@@ -128,6 +131,7 @@ export const batchRoutes: FastifyPluginAsync<{ services: Services }> = async (
       if (bytes.length === 0) {
         throw new ApiError(400, 'invalid_csv', 'Can’t use this file', 'The file is empty.');
       }
+      await checkUpload(db, config, uploadLimiter, access.org, bytes.length, reply);
       id = await createCsvBatch(
         services,
         { orgId: access.org.id },

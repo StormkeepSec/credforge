@@ -21,6 +21,7 @@ export interface PublicPagesOptions {
     | 'email'
     | 'storage'
     | 'oauth'
+    | 'moderation'
   >;
   assets: PublicAssets;
 }
@@ -50,6 +51,10 @@ export function legalFacts(config: PublicPagesOptions['config']): LegalFacts {
       storageRegion: storage.driver === 's3' ? storage.region : null,
       google: Boolean(config.oauth.google),
       microsoft: Boolean(config.oauth.microsoft),
+    },
+    moderation: {
+      review: config.moderation.review,
+      blocklist: config.moderation.blocklist.terms.length > 0,
     },
   };
 }
